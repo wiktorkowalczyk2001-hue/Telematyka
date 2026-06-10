@@ -1,6 +1,6 @@
 import { getCache, setCache, queuePendingOp, isNetworkError, clearCacheIfNeeded, prepareForOfflineCache } from './offlineCache';
 
-const API_URL = 'http://192.168.0.31:3001';
+const API_URL = typeof window !== 'undefined' ? '/api' : 'http://192.168.0.31:3001';
 
 const mapPatient = (p) => ({
   id: p.id,
@@ -139,14 +139,8 @@ export const addPatient = async (patientData, doctorId) => {
     return mapPatient(patient);
   } catch (e) {
     if (isNetworkError(e)) {
-      await clearCacheIfNeeded();
-      await queuePendingOp({
-        _table: 'patients',
-        method: 'POST',
-        url: `${API_URL}/patients`,
-        body: JSON.stringify(body),
-      });
       const tempId = 'pending_' + Date.now();
+      await queuePendingOp({ url: `${API_URL}/patients`, method: 'POST', body: JSON.stringify(body), tempId });
       const tempRaw = { id: tempId, ...body, created_at: new Date().toISOString(), _pending: true };
       const cached = (await getCache(`patients_${doctorId}`)) || [];
       await setCache(`patients_${doctorId}`, [...cached, tempRaw]);

@@ -1,6 +1,6 @@
 import { getCache, setCache, queuePendingOp, isNetworkError } from './offlineCache';
 
-const API_URL = 'http://192.168.0.31:3001';
+const API_URL = typeof window !== 'undefined' ? '/api' : 'http://192.168.0.31:3001';
 
 const mapVisit = (v) => ({
   id: v.id,
@@ -121,14 +121,9 @@ export const addVisit = async (visitData, doctorId) => {
     return mapVisit(visit);
   } catch (e) {
     if (isNetworkError(e)) {
-      await queuePendingOp({
-        _table: 'visits',
-        url: `${API_URL}/visits`,
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
       
       const tempId = 'pending_' + Date.now();
+      await queuePendingOp({ url: `${API_URL}/visits`, method: 'POST', body: JSON.stringify(body), tempId });
       const tempRaw = { id: tempId, ...body, created_at: new Date().toISOString(), _pending: true };
       const cached = (await getCache(`visits_${doctorId}`)) || [];
       await setCache(`visits_${doctorId}`, [...cached, tempRaw]);

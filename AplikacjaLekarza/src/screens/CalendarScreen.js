@@ -262,44 +262,39 @@ export default function CalendarScreen() {
 
   const isToday = selectedDate === today;
 
-  const ApptCard = ({ item, index }) => {
-    const p = useSharedValue(0);
-    const anim = useAnimatedStyle(() => ({
-      transform: [{ scale: interpolate(p.value, [0, 1], [1, 0.97]) }],
-    }));
-    return (
-      <Animated.View entering={FadeInDown.delay(index * 60).springify().damping(16).stiffness(120)}>
+  const ApptCard = ({ item, index }) => (
+    <Animated.View
+      entering={FadeInDown.delay(index * 60).springify().damping(16).stiffness(120)}
+      style={styles.apptCard}
+    >
+      <View style={styles.apptTop}>
+        <Text style={styles.apptTime} numberOfLines={1}>
+          {item.visitTime} – <Text style={styles.apptName}>{item.patientName}</Text>
+        </Text>
+        <View style={styles.apptTopRight}>
+          <Text style={styles.apptAge}>Wiek: {item.patientAge}</Text>
+          <Pressable
+            onPress={() => handleDeleteVisit(item)}
+            style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.6 }]}
+            hitSlop={8}
+          >
+            <Text style={styles.deleteBtnText}>✕</Text>
+          </Pressable>
+        </View>
+      </View>
+      {!!item.reason && <Text style={styles.apptReason}>{item.reason}</Text>}
+      <View style={styles.apptBottom}>
         <Pressable
-          onPressIn={() => { p.value = withSpring(1, { damping: 14 }); }}
-          onPressOut={() => { p.value = withSpring(0, { damping: 14 }); }}
+          onPress={() => handleStartVisit(item)}
+          style={({ pressed }) => [styles.startBtn, !isToday && styles.startBtnDisabled, pressed && { opacity: 0.75 }]}
         >
-          <Animated.View style={[styles.apptCard, anim]}>
-            <View style={styles.apptTop}>
-              <Text style={styles.apptTime}>{item.visitTime} – <Text style={styles.apptName}>{item.patientName}</Text></Text>
-              <View style={styles.apptTopRight}>
-                <Text style={styles.apptAge}>Wiek: {item.patientAge}</Text>
-                <Pressable onPress={() => handleDeleteVisit(item)} style={styles.deleteBtn}>
-                  <Text style={styles.deleteBtnText}>✕</Text>
-                </Pressable>
-              </View>
-            </View>
-            {!!item.reason && <Text style={styles.apptReason}>{item.reason}</Text>}
-            <View style={styles.apptBottom}>
-              <Pressable
-                onPress={() => handleStartVisit(item)}
-                style={({ pressed }) => [styles.startBtn, !isToday && styles.startBtnDisabled, pressed && { opacity: 0.75 }]}
-                disabled={!isToday}
-              >
-                <Text style={[styles.startBtnText, !isToday && styles.startBtnTextDisabled]}>
-                  {isToday ? 'Rozpocznij wizytę' : 'Nie dzisiaj'}
-                </Text>
-              </Pressable>
-            </View>
-          </Animated.View>
+          <Text style={[styles.startBtnText, !isToday && styles.startBtnTextDisabled]}>
+            {isToday ? 'Rozpocznij wizytę' : 'Nie dzisiaj'}
+          </Text>
         </Pressable>
-      </Animated.View>
-    );
-  };
+      </View>
+    </Animated.View>
+  );
 
   const renderAppointment = ({ item, index }) => (
     <ApptCard item={item} index={index} />
@@ -311,7 +306,6 @@ export default function CalendarScreen() {
       <Animated.View
         entering={FadeInDown.delay(60).springify().damping(18)}
         style={styles.calendarCard}
-        {...panResponder.panHandlers}
       >
         <Calendar
           key={C.bg}
@@ -324,16 +318,11 @@ export default function CalendarScreen() {
         />
       </Animated.View>
 
-      <View style={styles.listContainer}>
+      <View style={styles.listContainer} {...panResponder.panHandlers}>
         <View style={styles.listHeader}>
-          <View>
-            <Text style={styles.listTitle}>
-              {isToday ? 'Dzisiaj' : selectedDate}
-            </Text>
-            {appointments.length > 0 && (
-              <Text style={styles.listCount}>{appointments.length} wizyt{appointments.length === 1 ? 'a' : 'y'}</Text>
-            )}
-          </View>
+          <Text style={styles.listTitle}>
+            Wizyty ({selectedDate})
+          </Text>
           <Pressable onPress={openAddModal} style={styles.addBtn}>
             <Text style={styles.addBtnText}>+ Dodaj</Text>
           </Pressable>
