@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useContext } from 'react';
 import { StyleSheet, View, FlatList, Alert, Text, Pressable, Platform, PanResponder } from 'react-native';
 import { ActivityIndicator, Modal, Portal, TextInput, Button, List } from 'react-native-paper';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
@@ -41,6 +41,7 @@ import { fetchVisitsByDate, fetchMarkedDates, addVisit, deleteVisit } from '../s
 import { fetchAllPatients } from '../services/patientService';
 import { scheduleVisitReminder, cancelVisitReminder } from '../services/notificationService';
 import { useAIContext } from '../context/AIContext';
+import { AuthContext } from '../context/AuthContext';
 import ScreenHeader from '../components/ScreenHeader';
 import { useColors } from '../context/ThemeContext';
 
@@ -57,6 +58,7 @@ export default function CalendarScreen() {
   const C = useColors();
   const styles = React.useMemo(() => makeStyles(C), [C]);
   const router = useRouter();
+  const { user } = useContext(AuthContext); // Get current user
   const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
 
   const [selectedDate, setSelectedDate] = useState(today);
@@ -107,15 +109,18 @@ export default function CalendarScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadMarkedDates();
-      loadAppointments(selectedDate);
-      setAIContext({ screen: 'calendar', screenLabel: 'Kalendarz wizyt', selectedDate });
-    }, [])
+      if (user?.id) {
+        loadMarkedDates();
+        loadAppointments(selectedDate);
+        setAIContext({ screen: 'calendar', screenLabel: 'Kalendarz wizyt', selectedDate });
+      }
+    }, [user?.id])
   );
 
   const loadMarkedDates = async () => {
     try {
-      const counts = await fetchMarkedDates();
+      if (!user?.id) return;
+      const counts = await fetchMarkedDates(user.id); // Pass doctorId
       setVisitCounts(counts);
     } catch (e) {
       console.error(e);
@@ -125,7 +130,11 @@ export default function CalendarScreen() {
   const loadAppointments = async (date) => {
     setLoadingList(true);
     try {
-      const data = await fetchVisitsByDate(date);
+      if (!user?.id) {
+        setAppointments([]);
+        return;
+      }
+      const data = await fetchVisitsByDate(date, user.id); // Pass doctorId
       setAppointments(data);
     } catch (e) {
       setAppointments([]);
@@ -142,7 +151,7 @@ export default function CalendarScreen() {
       loadAppointments(next);
       return next;
     });
-  }, []);
+  }, [user?.id]);
 
   const panResponder = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => false,
@@ -186,7 +195,8 @@ export default function CalendarScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteVisit(appt.id);
+              if (!user?.id) return;
+              await deleteVisit(appt.id, user.id); // Pass doctorId
               loadAppointments(selectedDate);
               loadMarkedDates();
             } catch (e) {
@@ -200,7 +210,8 @@ export default function CalendarScreen() {
 
   const openAddModal = async () => {
     try {
-      const data = await fetchAllPatients();
+      if (!user?.id) return;
+      const data = await fetchAllPatients(user.id); // Pass doctorId
       setPatients(data);
     } catch (e) {
       Alert.alert('Błąd', 'Nie można załadować pacjentów.');
@@ -213,7 +224,7 @@ export default function CalendarScreen() {
   };
 
   const handleSaveVisit = async () => {
-    if (!selectedPatient || !newTime) {
+    if (!selectedPatient || !newTime || !user?.id) {
       Alert.alert('Błąd', 'Wybierz pacjenta i podaj godzinę.');
       return;
     }
@@ -229,7 +240,7 @@ export default function CalendarScreen() {
         visitDate: selectedDate,
         visitTime: newTime,
         reason: newReason || 'Brak wpisu',
-      });
+      }, user.id); // Pass doctorId
       if (newVisit?.id && newTime) {
         scheduleVisitReminder({
           visitId: newVisit.id,
