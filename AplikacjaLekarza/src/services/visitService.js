@@ -4,6 +4,7 @@ const API_URL = 'http://192.168.0.31:3001';
 
 const mapVisit = (v) => ({
   id: v.id,
+  doctorId: v.doctor_id,
   patientId: v.patient_id,
   visitDate: v.visit_date,
   visitTime: v.visit_time,
@@ -15,14 +16,25 @@ const mapVisit = (v) => ({
   createdAt: v.created_at,
 });
 
-export const fetchVisitsByDate = async (date) => {
+/**
+ * Fetch visits for a specific date, filtered by doctor
+ */
+export const fetchVisitsByDate = async (date, doctorId) => {
+  if (!doctorId) throw new Error('Doctor ID is required');
+  
   try {
     const r = await fetch(
-      `${API_URL}/visits?visit_date=eq.${date}&order=visit_time.asc&select=*,patients(first_name,last_name,age,pesel)`,
+      `${API_URL}/visits?visit_date=eq.${date}&doctor_id=eq.${doctorId}&order=visit_time.asc&select=*,patients(first_name,last_name,age,pesel)`,
       { headers: { 'Content-Type': 'application/json' } }
     );
     if (!r.ok) throw new Error('Failed to fetch visits');
     const data = await r.json();
+    
+    // Cache per-doctor
+    const cached = (await getCache(`visits_${doctorId}`)) || [];
+    const otherDates = cached.filter(v => v.visit_date !== date);
+    await setCache(`visits_${doctorId}`, [...otherDates, ...data]);
+    
     return data.map((v) => ({
       ...mapVisit(v),
       patientName: v.patients ? `${v.patients.first_name} ${v.patients.last_name}` : 'Nieznany',
@@ -31,7 +43,7 @@ export const fetchVisitsByDate = async (date) => {
     }));
   } catch (e) {
     if (isNetworkError(e)) {
-      const cached = await getCache('visits');
+      const cached = await getCache(`visits_${doctorId}`);
       if (!cached) return [];
       return cached
         .filter((v) => v.visit_date === date)
@@ -47,31 +59,47 @@ export const fetchVisitsByDate = async (date) => {
   }
 };
 
-export const fetchMarkedDates = async () => {
+/**
+ * Fetch all marked dates (dates with visits) for current doctor
+ */
+export const fetchMarkedDates = async (doctorId) => {
+  if (!doctorId) throw new Error('Doctor ID is required');
+  
   try {
-    const r = await fetch(`${API_URL}/visits?select=visit_date`, {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    // Get all visits for this doctor
+    const r = await fetch(
+      `${API_URL}/visits?doctor_id=eq.${doctorId}&select=visit_date`,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
     if (!r.ok) throw new Error('Failed to fetch dates');
     const data = await r.json();
+    
     const counts = {};
     data.forEach((v) => { counts[v.visit_date] = (counts[v.visit_date] || 0) + 1; });
+    
+    // Cache per-doctor
+    await setCache(`marked_dates_${doctorId}`, counts);
+    
     return counts;
   } catch (e) {
     if (isNetworkError(e)) {
-      const cached = await getCache('visits');
+      const cached = await getCache(`marked_dates_${doctorId}`);
       if (!cached) return {};
-      const counts = {};
-      cached.forEach((v) => { counts[v.visit_date] = (counts[v.visit_date] || 0) + 1; });
-      return counts;
+      return cached;
     }
     throw e;
   }
 };
 
-export const addVisit = async (visitData) => {
+/**
+ * Add new visit (associated with current doctor)
+ */
+export const addVisit = async (visitData, doctorId) => {
+  if (!doctorId) throw new Error('Doctor ID is required');
+  
   const body = {
     patient_id: visitData.patientId,
+    doctor_id: doctorId, // Assign to current doctor
     visit_date: visitData.visitDate,
     visit_time: visitData.visitTime,
     reason: visitData.reason || 'Brak wpisu',
@@ -85,79 +113,142 @@ export const addVisit = async (visitData) => {
     if (!r.ok) throw new Error('Failed to add visit');
     const data = await r.json();
     const visit = data[0];
-    const cached = (await getCache('visits')) || [];
-    await setCache('visits', [...cached, visit]);
+    
+    // Cache per-doctor
+    const cached = (await getCache(`visits_${doctorId}`)) || [];
+    await setCache(`visits_${doctorId}`, [...cached, visit]);
+    
     return mapVisit(visit);
   } catch (e) {
     if (isNetworkError(e)) {
-      await queuePendingOp({ url: `${API_URL}/visits`, method: 'POST', body: JSON.stringify(body) });
+      await queuePendingOp({
+        _table: 'visits',
+        url: `${API_URL}/visits`,
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      
       const tempId = 'pending_' + Date.now();
       const tempRaw = { id: tempId, ...body, created_at: new Date().toISOString(), _pending: true };
-      const cached = (await getCache('visits')) || [];
-      await setCache('visits', [...cached, tempRaw]);
+      const cached = (await getCache(`visits_${doctorId}`)) || [];
+      await setCache(`visits_${doctorId}`, [...cached, tempRaw]);
+      
       return mapVisit(tempRaw);
     }
     throw e;
   }
 };
 
-export const saveVisitSOAP = async (visitId, soap) => {
+/**
+ * Save visit SOAP notes, filtered by doctor
+ */
+export const saveVisitSOAP = async (visitId, soap, doctorId) => {
+  if (!doctorId) throw new Error('Doctor ID is required');
+  
   const body = {
     soap_subjective: soap.subjective,
     soap_objective: soap.objective,
     soap_assessment: soap.assessment,
     soap_plan: soap.plan,
   };
+  
   try {
-    const r = await fetch(`${API_URL}/visits?id=eq.${visitId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
-      body: JSON.stringify(body),
-    });
+    // Query with doctor_id filter for security
+    const r = await fetch(
+      `${API_URL}/visits?id=eq.${visitId}&doctor_id=eq.${doctorId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify(body),
+      }
+    );
+    
     if (!r.ok) throw new Error('Failed to save SOAP');
+    
+    // Update cache
+    const cached = (await getCache(`visits_${doctorId}`)) || [];
+    await setCache(`visits_${doctorId}`, cached.map((v) => (v.id === visitId ? { ...v, ...body } : v)));
+    
     return r.json();
   } catch (e) {
     if (isNetworkError(e)) {
-      await queuePendingOp({ url: `${API_URL}/visits?id=eq.${visitId}`, method: 'PATCH', body: JSON.stringify(body) });
-      const cached = (await getCache('visits')) || [];
-      await setCache('visits', cached.map((v) => (v.id === visitId ? { ...v, ...body } : v)));
+      await queuePendingOp({
+        _table: 'visits',
+        method: 'PATCH',
+        url: `${API_URL}/visits?id=eq.${visitId}`,
+        body: JSON.stringify(body),
+      });
+      
+      const cached = (await getCache(`visits_${doctorId}`)) || [];
+      await setCache(`visits_${doctorId}`, cached.map((v) => (v.id === visitId ? { ...v, ...body } : v)));
+      
       return;
     }
     throw e;
   }
 };
 
-export const deleteVisit = async (visitId) => {
+/**
+ * Delete visit, filtered by doctor
+ */
+export const deleteVisit = async (visitId, doctorId) => {
+  if (!doctorId) throw new Error('Doctor ID is required');
+  
   try {
-    const r = await fetch(`${API_URL}/visits?id=eq.${visitId}`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-    });
+    // Query with doctor_id filter for security
+    const r = await fetch(
+      `${API_URL}/visits?id=eq.${visitId}&doctor_id=eq.${doctorId}`,
+      { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }
+    );
+    
     if (!r.ok) throw new Error('Failed to delete visit');
-    const cached = (await getCache('visits')) || [];
-    await setCache('visits', cached.filter((v) => v.id !== visitId));
+    
+    // Update cache
+    const cached = (await getCache(`visits_${doctorId}`)) || [];
+    await setCache(`visits_${doctorId}`, cached.filter((v) => v.id !== visitId));
   } catch (e) {
     if (isNetworkError(e)) {
-      await queuePendingOp({ url: `${API_URL}/visits?id=eq.${visitId}`, method: 'DELETE', body: null });
-      const cached = (await getCache('visits')) || [];
-      await setCache('visits', cached.filter((v) => v.id !== visitId));
+      await queuePendingOp({
+        _table: 'visits',
+        method: 'DELETE',
+        url: `${API_URL}/visits?id=eq.${visitId}`,
+        body: null,
+      });
+      
+      const cached = (await getCache(`visits_${doctorId}`)) || [];
+      await setCache(`visits_${doctorId}`, cached.filter((v) => v.id !== visitId));
+      
       return;
     }
     throw e;
   }
 };
 
-export const fetchPatientVisits = async (patientId) => {
+/**
+ * Fetch all visits for a specific patient (doctor-filtered)
+ */
+export const fetchPatientVisits = async (patientId, doctorId) => {
+  if (!doctorId) throw new Error('Doctor ID is required');
+  
   try {
+    // Filter by both patient_id and doctor_id
     const r = await fetch(
-      `${API_URL}/visits?patient_id=eq.${patientId}&order=visit_date.desc,visit_time.desc`,
+      `${API_URL}/visits?patient_id=eq.${patientId}&doctor_id=eq.${doctorId}&order=visit_date.desc,visit_time.desc`,
       { headers: { 'Content-Type': 'application/json' } }
     );
+    
     if (!r.ok) throw new Error('Failed to fetch patient visits');
-    return (await r.json()).map(mapVisit);
+    
+    // Update cache
+    const data = await r.json();
+    const cached = (await getCache(`visits_${doctorId}`)) || [];
+    const otherVisits = cached.filter(v => v.patient_id !== patientId);
+    await setCache(`visits_${doctorId}`, [...otherVisits, ...data]);
+    
+    return data.map(mapVisit);
   } catch (e) {
     if (isNetworkError(e)) {
-      const cached = await getCache('visits');
+      const cached = await getCache(`visits_${doctorId}`);
       if (cached) return cached.filter((v) => v.patient_id === patientId).map(mapVisit);
     }
     throw e;

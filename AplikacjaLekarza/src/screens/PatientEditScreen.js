@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { StyleSheet, ScrollView, KeyboardAvoidingView, Platform, View, Text, Pressable } from 'react-native';
 import { TextInput, ActivityIndicator, Snackbar, HelperText } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { addPatient, updatePatient, fetchPatientById } from '../services/patientService';
+import { AuthContext } from '../context/AuthContext';
 
 const C = {
   bg: '#0B1220',
@@ -38,6 +39,7 @@ function SectionLabel({ title, delay = 0 }) {
 export default function PatientEditScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const { user } = useContext(AuthContext); // Get current user
   const isEditMode = !!params.patientId;
 
   const [firstName, setFirstName] = useState('');

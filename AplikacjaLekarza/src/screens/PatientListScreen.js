@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useContext } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl } from 'react-native';
 import { Searchbar, Card, Text, Avatar, useTheme, ActivityIndicator, FAB } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 import { fetchAllPatients, searchPatients } from '../services/patientService';
 import { useFocusEffect } from '@react-navigation/native';
+import { AuthContext } from '../context/AuthContext';
 
 export default function PatientListScreen() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -12,11 +13,16 @@ export default function PatientListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const theme = useTheme();
   const router = useRouter();
+  const { user } = useContext(AuthContext); // Get current user
 
   const loadPatients = async () => {
     try {
+      if (!user?.id) {
+        console.error('User ID not available');
+        return;
+      }
       setLoading(true);
-      const data = await fetchAllPatients();
+      const data = await fetchAllPatients(user.id); // Pass doctorId
       setPatients(data);
     } catch (error) {
       console.error('Failed to load patients', error);
@@ -29,17 +35,21 @@ export default function PatientListScreen() {
   useFocusEffect(
     useCallback(() => {
       loadPatients();
-    }, [])
+    }, [user?.id]) // Depend on user.id
   );
 
   const handleSearch = async (query) => {
     setSearchQuery(query);
     try {
+      if (!user?.id) {
+        console.error('User ID not available');
+        return;
+      }
       if (query.trim() === '') {
-        const data = await fetchAllPatients();
+        const data = await fetchAllPatients(user.id);
         setPatients(data);
       } else {
-        const data = await searchPatients(query);
+        const data = await searchPatients(query, user.id);
         setPatients(data);
       }
     } catch (error) {
@@ -50,7 +60,7 @@ export default function PatientListScreen() {
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     loadPatients();
-  }, []);
+  }, [user?.id]);
 
   const getInitials = (firstName, lastName) => {
     return `${firstName?.charAt(0) || ''}${lastName?.charAt(0) || ''}`.toUpperCase();

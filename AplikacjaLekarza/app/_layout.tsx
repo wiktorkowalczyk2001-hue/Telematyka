@@ -42,16 +42,22 @@ export const unstable_settings = {
 export default function RootLayout() {
   const [isReady, setIsReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userStatus, setUserStatus] = useState<string | null>(null); // 'pending', 'approved', 'rejected'
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
     const checkToken = async () => {
       try {
-        const token = await AsyncStorage.getItem('userToken');
-        setIsAuthenticated(!!token);
+        const user = await AsyncStorage.getItem('user');
+        if (user) {
+          const userData = JSON.parse(user);
+          setIsAuthenticated(true);
+          setUserStatus(userData.status);
+        }
         requestNotificationPermissions();
       } catch (e) {
+        console.error('Error checking auth:', e);
       } finally {
         setIsReady(true);
       }
@@ -61,14 +67,41 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (!isReady) return;
+    
     const inAuthGroup = segments[0] === 'login';
+    const inPendingGroup = segments[0] === 'pending-approval';
+    const inAdminGroup = segments[0] === 'admin';
 
+    // Not authenticated → go to login
     if (!isAuthenticated && !inAuthGroup) {
       router.replace('/login');
-    } else if (isAuthenticated && inAuthGroup) {
-      router.replace('/(tabs)');
+      return;
     }
-  }, [isAuthenticated, isReady, segments]);
+
+    // Authenticated but on login page → redirect
+    if (isAuthenticated && inAuthGroup) {
+      if (userStatus === 'pending') {
+        router.replace('/pending-approval');
+      } else if (userStatus === 'approved') {
+        router.replace('/(tabs)');
+      } else if (userStatus === 'rejected') {
+        router.replace('/login');
+      }
+      return;
+    }
+
+    // Authenticated with pending status
+    if (isAuthenticated && userStatus === 'pending' && !inPendingGroup) {
+      router.replace('/pending-approval');
+      return;
+    }
+
+    // Authenticated with approved status
+    if (isAuthenticated && userStatus === 'approved' && (inPendingGroup || inAuthGroup)) {
+      router.replace('/(tabs)');
+      return;
+    }
+  }, [isAuthenticated, userStatus, isReady, segments]);
 
   const signIn = async () => {
     await AsyncStorage.setItem('userToken', 'dummy-auth-token');
@@ -77,7 +110,9 @@ export default function RootLayout() {
 
   const signOut = async () => {
     await AsyncStorage.removeItem('userToken');
+    await AsyncStorage.removeItem('user');
     setIsAuthenticated(false);
+    setUserStatus(null);
   };
 
   if (!isReady) return null;
@@ -92,6 +127,8 @@ export default function RootLayout() {
           <Stack>
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="login" options={{ headerShown: false }} />
+            <Stack.Screen name="pending-approval" options={{ headerShown: false }} />
+            <Stack.Screen name="admin" options={{ headerShown: false }} />
             <Stack.Screen name="visit-form" options={{ presentation: 'modal', title: 'Formularz Wizyty' }} />
             <Stack.Screen name="patient-edit" options={{ presentation: 'modal', title: 'Nowy Pacjent', headerStyle: { backgroundColor: '#0B1220' }, headerTintColor: '#0ABFA3' }} />
             <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
