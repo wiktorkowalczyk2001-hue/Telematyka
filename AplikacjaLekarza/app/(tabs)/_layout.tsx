@@ -25,17 +25,17 @@ export default function TabLayout() {
         },
       }}>
       <Tabs.Screen
-        name="patients"
-        options={{
-          title: 'Pacjenci',
-          tabBarIcon: ({ color }) => <MaterialIcons size={24} name="people" color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="index"
         options={{
           title: 'Kalendarz',
           tabBarIcon: ({ color }) => <MaterialIcons size={24} name="event" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="patients"
+        options={{
+          title: 'Pacjenci',
+          tabBarIcon: ({ color }) => <MaterialIcons size={24} name="people" color={color} />,
         }}
       />
       <Tabs.Screen
