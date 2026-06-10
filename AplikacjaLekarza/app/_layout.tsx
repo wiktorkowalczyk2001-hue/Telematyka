@@ -1,26 +1,37 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, ThemeProvider as NavThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { PaperProvider, MD3LightTheme } from 'react-native-paper';
+import { PaperProvider, MD3DarkTheme } from 'react-native-paper';
 import 'react-native-reanimated';
-import { useEffect, useState, createContext, useContext } from 'react';
+import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AuthContext } from '../src/context/AuthContext';
+import { AIContextProvider } from '../src/context/AIContext';
+import { ThemeProvider } from '../src/context/ThemeContext';
+import { NetworkProvider } from '../src/context/NetworkContext';
+import { requestNotificationPermissions } from '../src/services/notificationService';
 
-// Custom theme for medical mHealth application
 const customTheme = {
-  ...MD3LightTheme,
+  ...MD3DarkTheme,
   colors: {
-    ...MD3LightTheme.colors,
-    primary: '#2B5B84', // Professional blue
-    background: '#F5F7FA', // Light grey background
-    surface: '#FFFFFF', // Clean white cards
-    onSurface: '#1C2B36', // Dark text for high readability
-    error: '#D32F2F', // Red for diagnoses
-    onBackground: '#1C2B36',
-    surfaceVariant: '#E8EEF5',
+    ...MD3DarkTheme.colors,
+    primary: '#0ABFA3',
+    onPrimary: '#fff',
+    primaryContainer: '#0F6E56',
+    onPrimaryContainer: '#9FE1CB',
+    secondary: '#1E3A52',
+    onSecondary: '#E8F0F7',
+    background: '#0B1220',
+    onBackground: '#E8F0F7',
+    surface: '#162033',
+    onSurface: '#E8F0F7',
+    surfaceVariant: '#1C2B40',
+    onSurfaceVariant: '#5A7A9A',
+    outline: '#1C2B40',
+    error: '#E87060',
+    onError: '#fff',
+    errorContainer: '#4A1B0C',
   },
 };
 
@@ -29,7 +40,6 @@ export const unstable_settings = {
 };
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
   const [isReady, setIsReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const segments = useSegments();
@@ -40,6 +50,7 @@ export default function RootLayout() {
       try {
         const token = await AsyncStorage.getItem('userToken');
         setIsAuthenticated(!!token);
+        requestNotificationPermissions();
       } catch (e) {
       } finally {
         setIsReady(true);
@@ -72,19 +83,33 @@ export default function RootLayout() {
   if (!isReady) return null;
 
   return (
+    <ThemeProvider>
+    <NetworkProvider>
+    <AIContextProvider>
     <AuthContext.Provider value={{ isAuthenticated, signIn, signOut }}>
       <PaperProvider theme={customTheme}>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <NavThemeProvider value={DarkTheme}>
           <Stack>
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="login" options={{ headerShown: false }} />
             <Stack.Screen name="visit-form" options={{ presentation: 'modal', title: 'Formularz Wizyty' }} />
-            <Stack.Screen name="patient-edit" options={{ presentation: 'modal', title: 'Nowy Pacjent' }} />
+            <Stack.Screen name="patient-edit" options={{ presentation: 'modal', title: 'Nowy Pacjent', headerStyle: { backgroundColor: '#0B1220' }, headerTintColor: '#0ABFA3' }} />
             <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            <Stack.Screen
+              name="ai-assistant"
+              options={{
+                presentation: 'modal',
+                headerShown: false,
+                animation: 'slide_from_bottom',
+              }}
+            />
           </Stack>
-          <StatusBar style="auto" />
-        </ThemeProvider>
+          <StatusBar style="light" backgroundColor="#0B1220" />
+        </NavThemeProvider>
       </PaperProvider>
     </AuthContext.Provider>
+    </AIContextProvider>
+    </NetworkProvider>
+    </ThemeProvider>
   );
 }

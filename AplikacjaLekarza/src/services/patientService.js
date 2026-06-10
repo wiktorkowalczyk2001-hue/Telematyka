@@ -1,294 +1,201 @@
-/**
- * Patient Service - Handles all database operations for patients
- * Uses PostgREST API directly (without Supabase auth)
- */
+import { getCache, setCache, queuePendingOp, isNetworkError } from './offlineCache';
 
-import Constants from 'expo-constants';
+const API_URL = 'http://192.168.0.31:3001';
 
-// Zmieniono na aktualne IP Twojego komputera w sieci (192.168.8.179)
-const API_URL = 'http://192.168.8.179:3001';
-
-// Transform snake_case to camelCase for consistency with frontend
-const mapPatient = (patient) => ({
-  id: patient.id,
-  firstName: patient.first_name,
-  lastName: patient.last_name,
-  pesel: patient.pesel,
-  age: patient.age,
-  phone: patient.phone,
-  email: patient.email,
-  address: patient.address,
-  diagnosis: patient.primary_diagnosis,
-  lastVisitDate: patient.last_visit,
-  allergies: patient.allergies,
-  chronicConditions: patient.chronic_conditions,
-  medicalHistory: patient.medical_history,
-  currentMedications: patient.medications,
-  notes: patient.clinical_notes,
-  createdAt: patient.created_at,
-  updatedAt: patient.updated_at,
+const mapPatient = (p) => ({
+  id: p.id,
+  firstName: p.first_name,
+  lastName: p.last_name,
+  pesel: p.pesel,
+  age: p.age,
+  phone: p.phone,
+  email: p.email,
+  address: p.address,
+  diagnosis: p.primary_diagnosis,
+  lastVisitDate: p.last_visit,
+  allergies: p.allergies,
+  chronicConditions: p.chronic_conditions,
+  medicalHistory: p.medical_history,
+  currentMedications: p.medications,
+  notes: p.clinical_notes,
+  createdAt: p.created_at,
+  updatedAt: p.updated_at,
 });
 
-/**
- * Fetch all patients from the database
- * @returns {Promise<Array>} Array of patient objects or throws error
- */
+const toDb = (d) => ({
+  first_name: d.firstName,
+  last_name: d.lastName,
+  pesel: d.pesel,
+  age: d.age || 0,
+  phone: d.phone || '',
+  email: d.email || '',
+  address: d.address || '',
+  primary_diagnosis: d.diagnosis || 'Brak wpisu',
+  last_visit: d.lastVisitDate || new Date().toISOString().split('T')[0],
+  allergies: d.allergies || '',
+  chronic_conditions: d.chronicConditions || '',
+  medical_history: d.medicalHistory || '',
+  medications: d.currentMedications || '',
+  clinical_notes: d.notes || '',
+});
+
 export const fetchAllPatients = async () => {
   try {
-    const response = await fetch(`${API_URL}/patients?order=created_at.desc`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+    const r = await fetch(`${API_URL}/patients?order=created_at.desc`, {
+      headers: { 'Content-Type': 'application/json' },
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Error fetching patients:', error);
-      throw error;
-    }
-
-    const data = await response.json();
-
+    if (!r.ok) throw new Error('Server error');
+    const data = await r.json();
+    await setCache('patients', data);
     return data.map(mapPatient);
-  } catch (error) {
-    console.error('fetchAllPatients error:', error);
-    throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      const cached = await getCache('patients');
+      if (cached) return cached.map(mapPatient);
+    }
+    throw e;
   }
 };
 
-/**
- * Fetch a single patient by ID
- * @param {string} patientId - The patient's UUID
- * @returns {Promise<Object>} Patient object or throws error
- */
 export const fetchPatientById = async (patientId) => {
+  if (!patientId) throw new Error('Patient ID is required');
   try {
-    if (!patientId) {
-      throw new Error('Patient ID is required');
-    }
-
-    const response = await fetch(`${API_URL}/patients?id=eq.${patientId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+    const r = await fetch(`${API_URL}/patients?id=eq.${patientId}`, {
+      headers: { 'Content-Type': 'application/json' },
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Error fetching patient:', error);
-      throw error;
-    }
-
-    const data = await response.json();
-    if (data.length === 0) {
-      throw new Error('Patient not found');
-    }
-
+    if (!r.ok) throw new Error('Server error');
+    const data = await r.json();
+    if (!data.length) throw new Error('Patient not found');
     return mapPatient(data[0]);
-  } catch (error) {
-    console.error('fetchPatientById error:', error);
-    throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      const cached = await getCache('patients');
+      const found = cached?.find((p) => p.id === patientId);
+      if (found) return mapPatient(found);
+    }
+    throw e;
   }
 };
 
-/**
- * Add a new patient to the database
- * @param {Object} patientData - Patient object
- * @returns {Promise<Object>} Created patient object or throws error
- */
 export const addPatient = async (patientData) => {
+  if (!patientData.firstName || !patientData.lastName || !patientData.pesel) {
+    throw new Error('Imię, nazwisko i PESEL są wymagane');
+  }
+  const body = toDb(patientData);
   try {
-    if (!patientData.firstName || !patientData.lastName || !patientData.pesel) {
-      throw new Error('Imię, nazwisko i PESEL są wymagane');
-    }
-
-    const response = await fetch(`${API_URL}/patients`, {
+    const r = await fetch(`${API_URL}/patients`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
-      },
-      body: JSON.stringify({
-        first_name: patientData.firstName,
-        last_name: patientData.lastName,
-        pesel: patientData.pesel,
-        age: patientData.age || 0,
-        phone: patientData.phone || '',
-        email: patientData.email || '',
-        address: patientData.address || '',
-        primary_diagnosis: patientData.diagnosis || 'Brak wpisu',
-        last_visit: patientData.lastVisitDate || new Date().toISOString().split('T')[0],
-        allergies: patientData.allergies || '',
-        chronic_conditions: patientData.chronicConditions || '',
-        medical_history: patientData.medicalHistory || '',
-        medications: patientData.currentMedications || '',
-        clinical_notes: patientData.notes || '',
-      }),
+      headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+      body: JSON.stringify(body),
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Error adding patient:', error);
-      throw error;
-    }
-
-    const data = await response.json();
+    if (!r.ok) throw new Error('Server error');
+    const data = await r.json();
     const patient = data[0] || data;
-
+    const cached = (await getCache('patients')) || [];
+    await setCache('patients', [...cached, patient]);
     return mapPatient(patient);
-  } catch (error) {
-    console.error('addPatient error:', error);
-    throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      await queuePendingOp({ url: `${API_URL}/patients`, method: 'POST', body: JSON.stringify(body) });
+      const tempId = 'pending_' + Date.now();
+      const tempRaw = { id: tempId, ...body, created_at: new Date().toISOString(), _pending: true };
+      const cached = (await getCache('patients')) || [];
+      await setCache('patients', [...cached, tempRaw]);
+      return mapPatient(tempRaw);
+    }
+    throw e;
   }
 };
 
-/**
- * Update an existing patient
- * @param {string} patientId - Patient UUID
- * @param {Object} patientData - Updated patient data
- * @returns {Promise<Object>} Updated patient object or throws error
- */
 export const updatePatient = async (patientId, patientData) => {
+  if (!patientId) throw new Error('Patient ID is required');
+  const body = toDb(patientData);
   try {
-    if (!patientId) {
-      throw new Error('Patient ID is required');
-    }
-
-    const response = await fetch(`${API_URL}/patients?id=eq.${patientId}`, {
+    const r = await fetch(`${API_URL}/patients?id=eq.${patientId}`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
-      },
-      body: JSON.stringify({
-        first_name: patientData.firstName,
-        last_name: patientData.lastName,
-        pesel: patientData.pesel,
-        age: patientData.age,
-        phone: patientData.phone,
-        email: patientData.email,
-        address: patientData.address,
-        primary_diagnosis: patientData.diagnosis,
-        last_visit: patientData.lastVisitDate,
-        allergies: patientData.allergies,
-        chronic_conditions: patientData.chronicConditions,
-        medical_history: patientData.medicalHistory,
-        medications: patientData.currentMedications,
-        clinical_notes: patientData.notes,
-      }),
+      headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+      body: JSON.stringify(body),
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Error updating patient:', error);
-      throw error;
-    }
-
-    const data = await response.json();
+    if (!r.ok) throw new Error('Server error');
+    const data = await r.json();
     const patient = data[0] || data;
-
+    const cached = (await getCache('patients')) || [];
+    await setCache('patients', cached.map((p) => (p.id === patientId ? { ...p, ...body } : p)));
     return mapPatient(patient);
-  } catch (error) {
-    console.error('updatePatient error:', error);
-    throw error;
+  } catch (e) {
+    if (isNetworkError(e)) {
+      await queuePendingOp({ url: `${API_URL}/patients?id=eq.${patientId}`, method: 'PATCH', body: JSON.stringify(body) });
+      const cached = (await getCache('patients')) || [];
+      await setCache('patients', cached.map((p) => (p.id === patientId ? { ...p, ...body, _pending: true } : p)));
+      const updated = cached.find((p) => p.id === patientId);
+      return mapPatient({ ...(updated || {}), ...body, id: patientId });
+    }
+    throw e;
   }
 };
 
-/**
- * Delete a patient
- * @param {string} patientId - Patient UUID
- * @returns {Promise<void>} or throws error
- */
 export const deletePatient = async (patientId) => {
+  if (!patientId) throw new Error('Patient ID is required');
   try {
-    if (!patientId) {
-      throw new Error('Patient ID is required');
-    }
-
-    const response = await fetch(`${API_URL}/patients?id=eq.${patientId}`, {
+    const r = await fetch(`${API_URL}/patients?id=eq.${patientId}`, {
       method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Error deleting patient:', error);
-      throw error;
+    if (!r.ok) throw new Error('Server error');
+    const cached = (await getCache('patients')) || [];
+    await setCache('patients', cached.filter((p) => p.id !== patientId));
+  } catch (e) {
+    if (isNetworkError(e)) {
+      await queuePendingOp({ url: `${API_URL}/patients?id=eq.${patientId}`, method: 'DELETE', body: null });
+      const cached = (await getCache('patients')) || [];
+      await setCache('patients', cached.filter((p) => p.id !== patientId));
+      return;
     }
-  } catch (error) {
-    console.error('deletePatient error:', error);
-    throw error;
+    throw e;
   }
 };
 
-/**
- * Search patients by name
- * @param {string} searchTerm - Search term (first or last name)
- * @returns {Promise<Array>} Array of matching patients or throws error
- */
 export const searchPatients = async (searchTerm) => {
+  if (!searchTerm?.trim()) return fetchAllPatients();
   try {
-    if (!searchTerm || searchTerm.trim() === '') {
-      return fetchAllPatients();
-    }
-
     const term = `%${searchTerm}%`;
-    const response = await fetch(`${API_URL}/patients?or=(first_name.ilike.${term},last_name.ilike.${term})&order=created_at.desc`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Error searching patients:', error);
-      throw error;
+    const r = await fetch(
+      `${API_URL}/patients?or=(first_name.ilike.${term},last_name.ilike.${term})&order=created_at.desc`,
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+    if (!r.ok) throw new Error('Server error');
+    return (await r.json()).map(mapPatient);
+  } catch (e) {
+    if (isNetworkError(e)) {
+      const cached = await getCache('patients');
+      if (cached) {
+        const q = searchTerm.toLowerCase();
+        return cached
+          .filter((p) => p.first_name?.toLowerCase().includes(q) || p.last_name?.toLowerCase().includes(q))
+          .map(mapPatient);
+      }
     }
-
-    const data = await response.json();
-
-    return data.map(mapPatient);
-  } catch (error) {
-    console.error('searchPatients error:', error);
-    throw error;
+    throw e;
   }
 };
 
-/**
- * Update clinical notes for a patient (PATCH)
- * @param {string} patientId - Patient UUID
- * @param {string} notes - The new clinical notes
- * @returns {Promise<Object>} Updated patient object
- */
 export const updateClinicalNotes = async (patientId, notes) => {
+  if (!patientId) throw new Error('Patient ID is required');
   try {
-    if (!patientId) throw new Error('Patient ID is required');
-
-    const response = await fetch(`${API_URL}/patients?id=eq.${patientId}`, {
+    const r = await fetch(`${API_URL}/patients?id=eq.${patientId}`, {
       method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        clinical_notes: notes,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clinical_notes: notes }),
     });
-
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('Error updating clinical notes:', error);
-      throw error;
+    if (!r.ok) throw new Error('Server error');
+    return r.json();
+  } catch (e) {
+    if (isNetworkError(e)) {
+      await queuePendingOp({ url: `${API_URL}/patients?id=eq.${patientId}`, method: 'PATCH', body: JSON.stringify({ clinical_notes: notes }) });
+      const cached = (await getCache('patients')) || [];
+      await setCache('patients', cached.map((p) => (p.id === patientId ? { ...p, clinical_notes: notes } : p)));
+      return;
     }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('updateClinicalNotes error:', error);
-    throw error;
+    throw e;
   }
 };

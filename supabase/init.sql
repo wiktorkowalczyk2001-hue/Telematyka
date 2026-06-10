@@ -68,6 +68,27 @@ CREATE POLICY "Allow anonymous update" ON patients
 CREATE POLICY "Allow anonymous delete" ON patients
   FOR DELETE USING (true);
 
+-- Create visits table
+CREATE TABLE IF NOT EXISTS visits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  visit_date DATE NOT NULL,
+  visit_time VARCHAR(5) NOT NULL,
+  reason VARCHAR(255) NOT NULL DEFAULT 'Brak wpisu',
+  soap_subjective TEXT,
+  soap_objective TEXT,
+  soap_assessment TEXT,
+  soap_plan TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_visits_patient_id ON visits(patient_id);
+CREATE INDEX IF NOT EXISTS idx_visits_date ON visits(visit_date);
+
+ALTER TABLE visits ENABLE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON visits TO anon;
+CREATE POLICY "Allow all visits" ON visits FOR ALL USING (true) WITH CHECK (true);
+
 -- Insert sample data
 INSERT INTO patients (first_name, last_name, pesel, age, phone, email, address, primary_diagnosis, last_visit, allergies, chronic_conditions, medical_history, medications, clinical_notes)
 VALUES 

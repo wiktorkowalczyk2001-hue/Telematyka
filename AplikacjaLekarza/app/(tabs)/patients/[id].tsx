@@ -1,372 +1,364 @@
-import React, { useState, useEffect } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
-import {
-  Surface,
-  Text,
-  Title,
-  Paragraph,
-  Divider,
-  Button,
-  useTheme,
-  ActivityIndicator,
-} from 'react-native-paper';
+import React, { useState, useEffect, useMemo } from 'react';
+import { ScrollView, StyleSheet, View, Text, Pressable, Platform } from 'react-native';
+import { ActivityIndicator, Button, Dialog, Portal } from 'react-native-paper';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { fetchPatientById } from '@/src/services/patientService';
+import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
+import { fetchPatientById, deletePatient } from '@/src/services/patientService';
+import { fetchPatientVisits } from '@/src/services/visitService';
+import { useAIContext } from '@/src/context/AIContext';
+import { useColors } from '@/src/context/ThemeContext';
 
-/**
- * PatientDetailsScreen Component
- * Displays detailed medical information for a selected patient
- */
+const AVATAR_COLORS = [
+  { bg: '#0F6E56', fg: '#9FE1CB' },
+  { bg: '#185FA5', fg: '#B5D4F4' },
+  { bg: '#533489', fg: '#CECBF6' },
+  { bg: '#633806', fg: '#FAC775' },
+  { bg: '#993C1D', fg: '#F5C4B3' },
+];
+
+function getAvatarColor(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash += name.charCodeAt(i);
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+}
+
+function formatDate(dateStr: string) {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleDateString('pl-PL', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function formatDateShort(dateStr: string) {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleDateString('pl-PL');
+}
+
+function InfoSection({ title, children, delay = 0 }: any) {
+  const C = useColors();
+  const styles = useMemo(() => makeStyles(C), [C]);
+  return (
+    <Animated.View entering={FadeInDown.delay(delay).springify().damping(18)} style={styles.section}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {children}
+    </Animated.View>
+  );
+}
+
+function InfoRow({ label, value }: any) {
+  const C = useColors();
+  const styles = useMemo(() => makeStyles(C), [C]);
+  return (
+    <View style={styles.infoRow}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={styles.infoValue}>{value || '—'}</Text>
+    </View>
+  );
+}
+
 export default function PatientDetailsScreen() {
+  const C = useColors();
+  const styles = useMemo(() => makeStyles(C), [C]);
   const { id } = useLocalSearchParams();
   const router = useRouter();
-  const theme = useTheme();
-  const [patient, setPatient] = useState(null);
+  const [patient, setPatient] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
+  const [deleteDialogVisible, setDeleteDialogVisible] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [visits, setVisits] = useState<any[]>([]);
+  const [visitsExpanded, setVisitsExpanded] = useState(false);
+  const { setAIContext } = useAIContext();
 
   useEffect(() => {
     loadPatientDetails();
+    loadVisits();
   }, [id]);
 
-  /**
-   * Load patient details from Supabase
-   */
   const loadPatientDetails = async () => {
     try {
       setLoading(true);
       setError(null);
       if (id) {
-        const patientData = await fetchPatientById(id);
-        setPatient(patientData);
+        const data = await fetchPatientById(id as string);
+        setPatient(data);
+        setAIContext({
+          screen: 'patient_detail',
+          screenLabel: `Karta pacjenta: ${data.firstName} ${data.lastName}`,
+          patient: {
+            name: `${data.firstName} ${data.lastName}`,
+            age: data.age,
+            diagnosis: data.diagnosis,
+            medications: data.currentMedications,
+            allergies: data.allergies,
+          },
+        });
       }
-    } catch (err) {
-      console.error('Error loading patient details:', err);
-      setError(err.message || 'Failed to load patient details');
+    } catch (err: any) {
+      setError(err.message || 'Błąd ładowania');
     } finally {
       setLoading(false);
     }
   };
 
-  /**
-   * Format date to Polish locale
-   */
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('pl-PL', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
+  const loadVisits = async () => {
+    try {
+      const data = await fetchPatientVisits(id as string);
+      setVisits(data);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  /**
-   * Handle edit patient action
-   */
   const handleEditPatient = () => {
-    alert('Edit Patient functionality will be implemented');
+    router.push({ pathname: '/patient-edit', params: { patientId: id } });
   };
 
-  /**
-   * Handle delete patient action
-   */
-  const handleDeletePatient = () => {
-    alert('Delete Patient functionality will be implemented');
+  const handleDeleteConfirm = async () => {
+    setDeleting(true);
+    try {
+      await deletePatient(id as string);
+      setDeleteDialogVisible(false);
+      router.back();
+    } catch (e) {
+      setDeleteDialogVisible(false);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   if (loading) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        <View style={styles.centerContainer}>
-          <ActivityIndicator animating={true} size="large" color={theme.colors.primary} />
-          <Text style={[styles.loadingText, { color: theme.colors.onSurface, marginTop: 12 }]}>
-            Loading patient data...
-          </Text>
-        </View>
+      <View style={styles.center}>
+        <ActivityIndicator animating color={C.accent} size="large" />
       </View>
     );
   }
 
-  if (error) {
+  if (error || !patient) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        <View style={styles.centerContainer}>
-          <Text style={[styles.errorText, { color: theme.colors.error }]}>Error</Text>
-          <Paragraph style={[styles.errorMessage, { color: theme.colors.onSurface }]}>
-            {error}
-          </Paragraph>
-          <Button mode="contained" onPress={loadPatientDetails} style={styles.retryButton}>
-            Try Again
-          </Button>
-        </View>
+      <View style={styles.center}>
+        <Text style={[styles.sectionTitle, { color: C.error }]}>Błąd</Text>
+        <Text style={styles.infoLabel}>{error || 'Nie znaleziono pacjenta'}</Text>
+        <Pressable onPress={loadPatientDetails} style={styles.retryBtn}>
+          <Text style={styles.retryText}>Spróbuj ponownie</Text>
+        </Pressable>
       </View>
     );
   }
 
-  if (!patient) {
-    return (
-      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        <View style={styles.centerContainer}>
-          <Text style={[styles.errorText, { color: theme.colors.onSurface }]}>Patient not found</Text>
-        </View>
-      </View>
-    );
-  }
+  const avatarColor = getAvatarColor(`${patient.firstName}${patient.lastName}`);
+  const initials = `${(patient.firstName || '')[0] || ''}${(patient.lastName || '')[0] || ''}`.toUpperCase();
+  const shownVisits = visitsExpanded ? visits : visits.slice(0, 3);
 
   return (
-    <ScrollView
-      style={[styles.container, { backgroundColor: theme.colors.background }]}
-      contentContainerStyle={styles.content}
-    >
-      {/* Patient Header Section */}
-      <Surface
-        style={[styles.headerSurface, { backgroundColor: theme.colors.primary }]}
-        elevation={1}
-      >
-        <View style={styles.headerContent}>
-          <Title style={[styles.patientNameHeader, { color: '#FFFFFF' }]}>
-            {patient.firstName} {patient.lastName}
-          </Title>
-          <View style={styles.ageRow}>
-            <Text style={[styles.ageLabel, { color: '#FFFFFF' }]}>Age:</Text>
-            <Text style={[styles.ageValue, { color: '#FFFFFF' }]}>{patient.age} years</Text>
-          </View>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <Animated.View entering={FadeInDown.springify()} style={styles.header}>
+        <View style={[styles.headerAvatar, { backgroundColor: avatarColor.bg }]}>
+          <Text style={[styles.headerAvatarText, { color: avatarColor.fg }]}>{initials}</Text>
         </View>
-      </Surface>
+        <View style={styles.headerInfo}>
+          <Text style={styles.headerName}>{patient.firstName} {patient.lastName}</Text>
+          <Text style={styles.headerAge}>{patient.age} lat</Text>
+          {patient.pesel ? (
+            <Text style={styles.pesel}>PESEL · {patient.pesel}</Text>
+          ) : null}
+        </View>
+      </Animated.View>
 
-      {/* Primary Diagnosis Section */}
-      <Surface
-        style={[styles.section, { backgroundColor: theme.colors.surface }]}
-        elevation={1}
-      >
-        <View style={styles.sectionHeader}>
-          <Title style={[styles.sectionTitle, { color: theme.colors.primary }]}>
-            Primary Diagnosis
-          </Title>
-        </View>
-        <Divider style={{ backgroundColor: theme.colors.surfaceVariant }} />
-        <View style={styles.sectionContent}>
-          <Text style={[styles.diagnosisText, { color: theme.colors.error }]}>
-            {patient.diagnosis}
-          </Text>
-        </View>
-      </Surface>
+      {patient.diagnosis ? (
+        <Animated.View entering={FadeInDown.delay(80).springify()} style={styles.diagBadge}>
+          <Text style={styles.diagText}>{patient.diagnosis}</Text>
+        </Animated.View>
+      ) : null}
 
-      {/* Last Visit Section */}
-      <Surface
-        style={[styles.section, { backgroundColor: theme.colors.surface }]}
-        elevation={1}
-      >
-        <View style={styles.sectionHeader}>
-          <Title style={[styles.sectionTitle, { color: theme.colors.primary }]}>
-            Last Visit
-          </Title>
-        </View>
-        <Divider style={{ backgroundColor: theme.colors.surfaceVariant }} />
-        <View style={styles.sectionContent}>
-          <Text style={[styles.dateText, { color: theme.colors.onSurface }]}>
-            {formatDate(patient.lastVisitDate)}
-          </Text>
-        </View>
-      </Surface>
+      <InfoSection title="Kontakt" delay={140}>
+        <InfoRow label="Telefon" value={patient.phone} />
+        <InfoRow label="E-mail" value={patient.email} />
+        <InfoRow label="Adres" value={patient.address} />
+      </InfoSection>
 
-      {/* Medical History Section */}
-      <Surface
-        style={[styles.section, { backgroundColor: theme.colors.surface }]}
-        elevation={1}
-      >
-        <View style={styles.sectionHeader}>
-          <Title style={[styles.sectionTitle, { color: theme.colors.primary }]}>
-            Medical History
-          </Title>
-        </View>
-        <Divider style={{ backgroundColor: theme.colors.surfaceVariant }} />
-        <View style={styles.sectionContent}>
-          <Paragraph style={[styles.bodyText, { color: theme.colors.onSurface }]}>
-            {patient.medicalHistory}
-          </Paragraph>
-        </View>
-      </Surface>
+      <InfoSection title="Historia medyczna" delay={200}>
+        <InfoRow label="Alergie" value={patient.allergies} />
+        <InfoRow label="Choroby przewlekłe" value={patient.chronicConditions} />
+        {patient.medicalHistory ? (
+          <Text style={styles.bodyText}>{patient.medicalHistory}</Text>
+        ) : null}
+      </InfoSection>
 
-      {/* Current Medications Section */}
-      <Surface
-        style={[styles.section, { backgroundColor: theme.colors.surface }]}
-        elevation={1}
-      >
-        <View style={styles.sectionHeader}>
-          <Title style={[styles.sectionTitle, { color: theme.colors.primary }]}>
-            Current Medications
-          </Title>
-        </View>
-        <Divider style={{ backgroundColor: theme.colors.surfaceVariant }} />
-        <View style={styles.sectionContent}>
-          <Paragraph style={[styles.bodyText, { color: theme.colors.onSurface }]}>
-            {patient.currentMedications}
-          </Paragraph>
-        </View>
-      </Surface>
+      <InfoSection title="Aktualne leki" delay={260}>
+        {patient.currentMedications ? (
+          <Text style={styles.bodyText}>{patient.currentMedications}</Text>
+        ) : (
+          <Text style={styles.emptyNote}>Brak wpisanych leków</Text>
+        )}
+      </InfoSection>
 
-      {/* Clinical Notes Section */}
-      <Surface
-        style={[styles.section, { backgroundColor: theme.colors.surface }]}
-        elevation={1}
-      >
-        <View style={styles.sectionHeader}>
-          <Title style={[styles.sectionTitle, { color: theme.colors.primary }]}>
-            Clinical Notes
-          </Title>
-        </View>
-        <Divider style={{ backgroundColor: theme.colors.surfaceVariant }} />
-        <View style={styles.sectionContent}>
-          <Paragraph style={[styles.notesText, { color: theme.colors.onSurface }]}>
-            {patient.notes}
-          </Paragraph>
-        </View>
-      </Surface>
+      <InfoSection title={`Historia wizyt (${visits.length})`} delay={320}>
+        {visits.length === 0 ? (
+          <Text style={styles.emptyNote}>Brak wizyt w historii</Text>
+        ) : (
+          <>
+            {shownVisits.map((visit, idx) => (
+              <View key={visit.id} style={[styles.visitRow, idx > 0 && styles.visitRowBorder]}>
+                <Text style={styles.visitDate}>{formatDateShort(visit.visitDate)}{visit.visitTime ? ` · ${visit.visitTime}` : ''}</Text>
+                <Text style={styles.visitReason}>{visit.reason}</Text>
+                {visit.soapAssessment ? <Text style={styles.visitSoap}>Rozpoznanie: {visit.soapAssessment}</Text> : null}
+                {visit.soapPlan ? <Text style={styles.visitSoap}>Plan: {visit.soapPlan}</Text> : null}
+              </View>
+            ))}
+            {visits.length > 3 && (
+              <Pressable onPress={() => setVisitsExpanded(!visitsExpanded)} style={styles.expandBtn}>
+                <Text style={styles.expandText}>{visitsExpanded ? 'Zwiń' : `Pokaż wszystkie (${visits.length})`}</Text>
+              </Pressable>
+            )}
+          </>
+        )}
+      </InfoSection>
 
-      {/* Action Buttons */}
-      <View style={styles.actionContainer}>
-        <Button
-          mode="contained"
+      <Animated.View entering={FadeInDown.delay(380).springify()} style={styles.actions}>
+        <Pressable
           onPress={handleEditPatient}
-          style={styles.editButton}
-          labelStyle={styles.buttonLabel}
+          style={({ pressed }) => [styles.btnEdit, pressed && { opacity: 0.8 }]}
         >
-          Edit Patient
-        </Button>
-        <Button
-          mode="outlined"
-          onPress={handleDeletePatient}
-          style={styles.deleteButton}
-          labelStyle={[styles.deleteButtonLabel, { color: theme.colors.error }]}
+          <Text style={styles.btnEditText}>Edytuj pacjenta</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setDeleteDialogVisible(true)}
+          style={({ pressed }) => [styles.btnDelete, pressed && { opacity: 0.8 }]}
         >
-          Delete Patient
-        </Button>
-      </View>
+          <Text style={styles.btnDeleteText}>Usuń</Text>
+        </Pressable>
+      </Animated.View>
 
-      {/* Spacing for scrollable area */}
-      <View style={styles.bottomSpacer} />
+      <View style={{ height: 40 }} />
+
+      <Portal>
+        <Dialog
+          visible={deleteDialogVisible}
+          onDismiss={() => setDeleteDialogVisible(false)}
+          style={styles.dialog}
+        >
+          <Dialog.Title style={styles.dialogTitle}>Usuń pacjenta</Dialog.Title>
+          <Dialog.Content>
+            <Text style={styles.dialogContent}>
+              Czy na pewno chcesz usunąć {patient.firstName} {patient.lastName}? Tej operacji nie można cofnąć.
+            </Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setDeleteDialogVisible(false)} disabled={deleting} textColor={C.muted}>Anuluj</Button>
+            <Button onPress={handleDeleteConfirm} loading={deleting} textColor={C.error}>Usuń</Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  content: {
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 24,
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-  },
-  loadingText: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  errorText: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  errorMessage: {
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  retryButton: {
-    marginTop: 8,
-  },
-  /* Header Section */
-  headerSurface: {
-    borderRadius: 8,
-    marginBottom: 16,
-    padding: 16,
-  },
-  headerContent: {
-    gap: 12,
-  },
-  patientNameHeader: {
-    fontSize: 24,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  ageRow: {
+function makeStyles(C: any) { return StyleSheet.create({
+  container: { flex: 1, backgroundColor: C.bg },
+  content: { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 24 },
+  center: { flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center' },
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 14,
+    backgroundColor: C.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: C.border,
   },
-  ageLabel: {
-    fontSize: 14,
-    fontWeight: '600',
+  headerAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
-  ageValue: {
-    fontSize: 14,
-    fontWeight: '500',
+  headerAvatarText: { fontSize: 20, fontWeight: '700' },
+  headerInfo: { flex: 1 },
+  headerName: { fontSize: 19, fontWeight: '700', color: C.text, marginBottom: 3 },
+  headerAge: { fontSize: 13, color: C.muted, marginBottom: 3 },
+  pesel: {
+    fontSize: 11,
+    color: C.dim,
+    fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier',
+    letterSpacing: 0.5,
   },
-  /* Section Styles */
+  diagBadge: {
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.accentDim,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+  },
+  diagText: { fontSize: 13, color: C.accent, fontWeight: '500' },
   section: {
-    borderRadius: 8,
-    marginBottom: 12,
-    overflow: 'hidden',
-  },
-  sectionHeader: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
+    backgroundColor: C.surface,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 9,
+    borderWidth: 1,
+    borderColor: C.border,
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 10,
+    color: C.dim,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 10,
     fontWeight: '600',
   },
-  sectionContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  /* Text Styles */
-  diagnosisText: {
-    fontSize: 16,
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 },
+  infoLabel: { fontSize: 12, color: C.muted, flex: 1 },
+  infoValue: { fontSize: 12, color: C.text, flex: 2, textAlign: 'right' },
+  bodyText: { fontSize: 13, color: C.muted, lineHeight: 20 },
+  emptyNote: { fontSize: 12, color: C.dim, fontStyle: 'italic' },
+  visitRow: { paddingVertical: 8 },
+  visitRowBorder: { borderTopWidth: 1, borderTopColor: C.border },
+  visitDate: {
+    fontSize: 11,
+    color: C.accent,
+    fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier',
+    marginBottom: 2,
     fontWeight: '600',
-    lineHeight: 24,
   },
-  dateText: {
-    fontSize: 15,
-    fontWeight: '500',
+  visitReason: { fontSize: 12, color: C.text, marginBottom: 2 },
+  visitSoap: { fontSize: 11, color: C.muted, fontStyle: 'italic' },
+  expandBtn: { marginTop: 8, alignItems: 'center' },
+  expandText: { fontSize: 12, color: C.accent, fontWeight: '600' },
+  actions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  btnEdit: {
+    flex: 1,
+    backgroundColor: C.accent,
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
   },
-  bodyText: {
-    fontSize: 14,
-    lineHeight: 22,
+  btnEditText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  btnDelete: {
+    backgroundColor: C.errorBg,
+    borderRadius: 12,
+    paddingVertical: 13,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#4A1B0C',
   },
-  notesText: {
-    fontSize: 14,
-    lineHeight: 24,
-    fontStyle: 'italic',
-  },
-  /* Action Buttons */
-  actionContainer: {
-    gap: 10,
+  btnDeleteText: { fontSize: 14, fontWeight: '600', color: C.error },
+  retryBtn: {
     marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: C.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.border,
   },
-  editButton: {
-    borderRadius: 8,
-  },
-  buttonLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  deleteButton: {
-    borderRadius: 8,
-  },
-  deleteButtonLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  /* Spacing */
-  bottomSpacer: {
-    height: 24,
-  },
-});
+  retryText: { color: C.accent, fontSize: 13, fontWeight: '600' },
+  dialog: { backgroundColor: C.surface, borderRadius: 16 },
+  dialogTitle: { color: C.text },
+  dialogContent: { color: C.muted, fontSize: 14, lineHeight: 20 },
+}); }

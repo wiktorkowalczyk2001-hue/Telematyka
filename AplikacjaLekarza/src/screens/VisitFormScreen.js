@@ -1,41 +1,51 @@
 import React, { useState } from 'react';
-import { StyleSheet, View, ScrollView, KeyboardAvoidingView, Platform, Alert } from 'react-native';
-import { Text, TextInput, Button, Card, useTheme, Snackbar, ActivityIndicator } from 'react-native-paper';
+import { StyleSheet, View, ScrollView, KeyboardAvoidingView, Platform, Alert, Text, Pressable } from 'react-native';
+import { TextInput, ActivityIndicator, Snackbar } from 'react-native-paper';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { updateClinicalNotes } from '../services/patientService';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { saveVisitSOAP } from '../services/visitService';
+
+const C = {
+  bg: '#0B1220',
+  surface: '#162033',
+  border: '#1C2B40',
+  accent: '#0ABFA3',
+  text: '#E8F0F7',
+  muted: '#5A7A9A',
+  dim: '#2D4560',
+  error: '#E87060',
+};
+
+const INPUT_THEME = {
+  colors: {
+    primary: C.accent,
+    background: C.surface,
+    onSurfaceVariant: C.muted,
+    outline: C.border,
+    onSurface: C.text,
+  },
+};
 
 export default function VisitFormScreen() {
   const params = useLocalSearchParams();
   const router = useRouter();
-  const theme = useTheme();
 
-  // SOAP Fields
-  const [subjective, setSubjective] = useState(''); // Wywiad lekarski
-  const [objective, setObjective] = useState('');   // Badanie fizykalne
-  const [assessment, setAssessment] = useState(''); // Rozpoznanie ICD-10
-  const [plan, setPlan] = useState('');             // Zalecenia, recepty
-
+  const [subjective, setSubjective] = useState('');
+  const [objective, setObjective] = useState('');
+  const [assessment, setAssessment] = useState('');
+  const [plan, setPlan] = useState('');
   const [loading, setLoading] = useState(false);
   const [snackbarVisible, setSnackbarVisible] = useState(false);
 
   const handleClear = () => {
-    Alert.alert(
-      'Wyczyść formularz',
-      'Czy na pewno chcesz usunąć wszystkie wpisane dane?',
-      [
-        { text: 'Anuluj', style: 'cancel' },
-        { 
-          text: 'Wyczyść', 
-          style: 'destructive', 
-          onPress: () => {
-            setSubjective('');
-            setObjective('');
-            setAssessment('');
-            setPlan('');
-          }
-        }
-      ]
-    );
+    Alert.alert('Wyczyść formularz', 'Czy na pewno chcesz usunąć wszystkie wpisane dane?', [
+      { text: 'Anuluj', style: 'cancel' },
+      {
+        text: 'Wyczyść',
+        style: 'destructive',
+        onPress: () => { setSubjective(''); setObjective(''); setAssessment(''); setPlan(''); },
+      },
+    ]);
   };
 
   const handleSaveVisit = async () => {
@@ -43,175 +53,138 @@ export default function VisitFormScreen() {
       Alert.alert('Błąd', 'Wypełnij przynajmniej jedno pole przed zapisem.');
       return;
     }
-
-    const combinedNotes = `
-[Data Wizyty: ${new Date().toISOString().split('T')[0]}]
-Wywiad (S): ${subjective || 'Brak wpisu'}
-Badanie fizykalne (O): ${objective || 'Brak wpisu'}
-Rozpoznanie (A): ${assessment || 'Brak wpisu'}
-Zalecenia (P): ${plan || 'Brak wpisu'}
-    `.trim();
-
     setLoading(true);
     try {
-      if (params.patientId && params.patientId !== 'new') { 
-        await updateClinicalNotes(params.patientId, combinedNotes);
+      if (params.visitId) {
+        await saveVisitSOAP(params.visitId, { subjective, objective, assessment, plan });
       }
-      
       setSnackbarVisible(true);
-      setTimeout(() => {
-        router.back();
-      }, 1500);
+      setTimeout(() => router.back(), 1500);
     } catch (e) {
-      // Fallback for mock/demo
+      console.error(e);
       setSnackbarVisible(true);
-      setTimeout(() => {
-        router.back();
-      }, 1500);
+      setTimeout(() => router.back(), 1500);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView 
-      style={{ flex: 1 }} 
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: C.bg }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
     >
-      <ScrollView 
-        style={{ flex: 1 }}
-        contentContainerStyle={[styles.container, { backgroundColor: theme.colors.background }]}
+      <ScrollView
+        contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        
-        {/* Header - Informacje o pacjencie */}
-        <Card style={styles.headerCard}>
-          <Card.Content>
-            <Text variant="titleLarge" style={{ color: theme.colors.primary, fontWeight: 'bold' }}>
-              Pacjent: {params.patientName || 'Nieznany'}
-            </Text>
-            <Text variant="bodyMedium">Wiek: {params.patientAge || '--'} lat | PESEL: {params.patientPesel || 'Brak'}</Text>
-          </Card.Content>
-        </Card>
+        <Animated.View entering={FadeInDown.springify()} style={styles.headerCard}>
+          <Text style={styles.headerName}>{params.patientName || 'Nieznany pacjent'}</Text>
+          <Text style={styles.headerMeta}>
+            {params.patientAge ? `${params.patientAge} lat` : ''}
+            {params.patientPesel ? ` · ${params.patientPesel}` : ''}
+          </Text>
+        </Animated.View>
 
-        {/* SOAP Formularz */}
-        <View style={styles.formContainer}>
-          <Text variant="titleMedium" style={styles.sectionTitle}>Przebieg wizyty (SOAP)</Text>
-          
-          <TextInput
-            label="S (Subjective) - Wywiad lekarski"
-            placeholder="Objawy, dolegliwości zgłaszane przez pacjenta..."
-            mode="outlined"
-            multiline
-            numberOfLines={4}
-            value={subjective}
-            onChangeText={setSubjective}
-            style={styles.input}
-          />
-          <TextInput
-            label="O (Objective) - Badanie fizykalne"
-            placeholder="Wyniki badań, ciśnienie, tętno, temperatura..."
-            mode="outlined"
-            multiline
-            numberOfLines={4}
-            value={objective}
-            onChangeText={setObjective}
-            style={styles.input}
-          />
-          <TextInput
-            label="A (Assessment) - Rozpoznanie"
-            placeholder="Wstępna diagnoza, kod ICD-10..."
-            mode="outlined"
-            multiline
-            numberOfLines={3}
-            value={assessment}
-            onChangeText={setAssessment}
-            style={styles.input}
-          />
-          <TextInput
-            label="P (Plan) - Zalecenia i leczenie"
-            placeholder="Zalecenia, e-Recepty, skierowania, termin kolejnej wizyty..."
-            mode="outlined"
-            multiline
-            numberOfLines={4}
-            value={plan}
-            onChangeText={setPlan}
-            style={styles.input}
-          />
+        <Animated.View entering={FadeInDown.delay(80).springify()} style={styles.soapLabel}>
+          <Text style={styles.soapLabelText}>Formularz wizyty — SOAP</Text>
+        </Animated.View>
 
-          {/* Akcje */}
-          <View style={styles.actionsContainer}>
-            <Button 
-              mode="text" 
-              onPress={handleClear} 
-              textColor={theme.colors.error}
-              style={styles.actionButton}
-              disabled={loading}
+        {[
+          { label: 'S — Wywiad lekarski (Subjective)', placeholder: 'Objawy, dolegliwości zgłaszane przez pacjenta...', value: subjective, onChange: setSubjective, delay: 100 },
+          { label: 'O — Badanie fizykalne (Objective)', placeholder: 'Wyniki badań, ciśnienie, tętno, temperatura...', value: objective, onChange: setObjective, delay: 160 },
+          { label: 'A — Rozpoznanie (Assessment)', placeholder: 'Wstępna diagnoza, kod ICD-10...', value: assessment, onChange: setAssessment, delay: 220 },
+          { label: 'P — Zalecenia i leczenie (Plan)', placeholder: 'Zalecenia, recepty, skierowania, termin kontroli...', value: plan, onChange: setPlan, delay: 280 },
+        ].map((field) => (
+          <Animated.View key={field.label} entering={FadeInDown.delay(field.delay).springify()}>
+            <TextInput
+              label={field.label}
+              placeholder={field.placeholder}
+              mode="outlined"
+              multiline
+              numberOfLines={4}
+              value={field.value}
+              onChangeText={field.onChange}
+              style={styles.input}
+              theme={INPUT_THEME}
+              textColor={C.text}
+              placeholderTextColor={C.dim}
+            />
+          </Animated.View>
+        ))}
+
+        <Animated.View entering={FadeInDown.delay(360).springify()} style={styles.actions}>
+          <Pressable onPress={handleClear} style={styles.clearBtn} disabled={loading}>
+            <Text style={styles.clearBtnText}>Wyczyść</Text>
+          </Pressable>
+          {loading ? (
+            <ActivityIndicator animating color={C.accent} style={styles.saveBtn} />
+          ) : (
+            <Pressable
+              onPress={handleSaveVisit}
+              style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.8 }]}
             >
-              Wyczyść
-            </Button>
-
-            {loading ? (
-              <ActivityIndicator animating={true} color={theme.colors.primary} style={styles.actionButton} />
-            ) : (
-              <Button 
-                mode="contained" 
-                onPress={handleSaveVisit} 
-                style={styles.actionButton}
-                buttonColor={theme.colors.primary}
-              >
-                Zakończ i zapisz wizytę
-              </Button>
-            )}
-          </View>
-        </View>
-
+              <Text style={styles.saveBtnText}>Zakończ i zapisz</Text>
+            </Pressable>
+          )}
+        </Animated.View>
       </ScrollView>
 
       <Snackbar
         visible={snackbarVisible}
         onDismiss={() => setSnackbarVisible(false)}
         duration={1500}
+        style={{ backgroundColor: C.surface }}
       >
-        Wizyta zapisana pomyślnie!
+        <Text style={{ color: C.accent }}>Wizyta zapisana pomyślnie!</Text>
       </Snackbar>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flexGrow: 1,
-    padding: 16,
-  },
+  container: { padding: 14, paddingBottom: 40 },
   headerCard: {
-    marginBottom: 20,
-    backgroundColor: '#E8EEF5', // Light blue surface
-    elevation: 0,
+    backgroundColor: C.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
     borderWidth: 1,
-    borderColor: '#cce0f5',
+    borderColor: C.border,
+    borderLeftWidth: 3,
+    borderLeftColor: C.accent,
   },
-  formContainer: {
-    gap: 16,
-    paddingBottom: 20,
+  headerName: { fontSize: 17, fontWeight: '700', color: C.text, marginBottom: 4 },
+  headerMeta: {
+    fontSize: 12,
+    color: C.muted,
+    fontFamily: Platform.OS === 'android' ? 'monospace' : 'Courier',
   },
-  sectionTitle: {
-    fontWeight: 'bold',
-    marginBottom: -8,
-  },
-  input: {
-    backgroundColor: '#fff',
-  },
-  actionsContainer: {
+  soapLabel: { marginBottom: 10 },
+  soapLabelText: { fontSize: 11, color: C.dim, textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: '600' },
+  input: { marginBottom: 10, backgroundColor: C.surface },
+  actions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 8,
+    gap: 10,
   },
-  actionButton: {
-    paddingVertical: 6,
-    borderRadius: 8,
-  }
+  clearBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  clearBtnText: { fontSize: 13, color: C.muted, fontWeight: '600' },
+  saveBtn: {
+    flex: 1,
+    backgroundColor: C.accent,
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  saveBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 });
