@@ -1,12 +1,33 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
-const API_URL = 'http://192.168.0.31:3001';
+const getApiUrl = () =>
+  Platform.OS === 'web' ? '/api' : 'http://192.168.0.31:3001';
+
+// Map PostgREST snake_case → camelCase
+function mapUser(u) {
+  if (!u) return null;
+  return {
+    id: u.id,
+    email: u.email,
+    firstName: u.first_name,
+    lastName: u.last_name,
+    specialization: u.specialization,
+    pwzNumber: u.pwz_number,
+    nip: u.nip,
+    clinicName: u.clinic_name,
+    status: u.status,
+    createdAt: u.created_at,
+    role: u.role,
+  };
+}
 
 export const AuthContext = createContext({
   isAuthenticated: false,
   user: null,
-  userStatus: null, // 'pending', 'approved', 'rejected'
+  userStatus: null,
+  loading: true,
   signIn: async () => {},
   signOut: async () => {},
   refreshUserStatus: async () => {},
@@ -18,7 +39,6 @@ export function AuthProvider({ children }) {
   const [userStatus, setUserStatus] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Try to restore auth state on app launch
   useEffect(() => {
     bootstrapAsync();
   }, []);
@@ -27,115 +47,75 @@ export function AuthProvider({ children }) {
     try {
       const storedUser = await AsyncStorage.getItem('user');
       const storedEmail = await AsyncStorage.getItem('userEmail');
-
       if (storedUser && storedEmail) {
-        const parsedUser = JSON.parse(storedUser);
-        setUser(parsedUser);
+        const parsed = JSON.parse(storedUser);
+        setUser(parsed);
         setIsAuthenticated(true);
-        
-        // Check current status in DB
         await refreshUserStatus(storedEmail);
       }
-    } catch (error) {
-      console.error('Error bootstrapping auth:', error);
+    } catch (e) {
+      console.error('[Auth] bootstrap error:', e);
     } finally {
       setLoading(false);
     }
   };
 
   const signIn = async (email, password) => {
-    try {
-      // Query users table to find user
-      const response = await fetch(`${API_URL}/users?email=eq.${encodeURIComponent(email)}`, {
-        headers: { 'Content-Type': 'application/json' },
-      });
+    // Use server-side bcrypt verification via /auth/login
+    const loginUrl = Platform.OS === 'web' ? '/auth/login' : 'http://192.168.0.31:4000/auth/login';
+    const res = await fetch(loginUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Błąd logowania.');
 
-      if (!response.ok) throw new Error('Invalid credentials');
-
-      const users = await response.json();
-      if (users.length === 0) throw new Error('User not found');
-
-      const userData = users[0];
-
-      // In production, verify password with bcrypt on backend
-      // For MVP, just check email exists
-      if (userData.status === 'rejected') {
-        throw new Error('Account rejected. Please contact support.');
-      }
-
-      setUser(userData);
-      setUserStatus(userData.status);
-      setIsAuthenticated(true);
-
-      // Store in AsyncStorage
-      await AsyncStorage.setItem('user', JSON.stringify(userData));
-      await AsyncStorage.setItem('userEmail', email);
-
-      return { success: true, status: userData.status };
-    } catch (error) {
-      setIsAuthenticated(false);
-      throw error;
-    }
+    const raw = data.user;
+    const mapped = mapUser(raw);
+    setUser(mapped);
+    setUserStatus(raw.status);
+    setIsAuthenticated(true);
+    await AsyncStorage.setItem('user', JSON.stringify(mapped));
+    await AsyncStorage.setItem('userEmail', email);
+    return { success: true, status: raw.status };
   };
 
   const signOut = async () => {
-    try {
-      await AsyncStorage.removeItem('user');
-      await AsyncStorage.removeItem('userEmail');
-      setUser(null);
-      setUserStatus(null);
-      setIsAuthenticated(false);
-    } catch (error) {
-      console.error('Error signing out:', error);
-    }
+    await AsyncStorage.removeItem('user');
+    await AsyncStorage.removeItem('userEmail');
+    setUser(null);
+    setUserStatus(null);
+    setIsAuthenticated(false);
   };
 
   const refreshUserStatus = async (email) => {
     try {
-      const response = await fetch(`${API_URL}/users?email=eq.${encodeURIComponent(email)}`, {
+      const API_URL = getApiUrl();
+      const res = await fetch(`${API_URL}/users?email=eq.${encodeURIComponent(email)}`, {
         headers: { 'Content-Type': 'application/json' },
       });
-
-      if (response.ok) {
-        const users = await response.json();
-        if (users.length > 0) {
-          const userData = users[0];
-          setUser(userData);
-          setUserStatus(userData.status);
-          
-          // Update stored user
-          await AsyncStorage.setItem('user', JSON.stringify(userData));
-          
-          return userData.status;
-        }
-      }
-    } catch (error) {
-      console.error('Error refreshing user status:', error);
+      if (!res.ok) return null;
+      const users = await res.json();
+      if (!users.length) return null;
+      const mapped = mapUser(users[0]);
+      setUser(mapped);
+      setUserStatus(users[0].status);
+      await AsyncStorage.setItem('user', JSON.stringify(mapped));
+      return users[0].status;
+    } catch (e) {
+      console.error('[Auth] refreshUserStatus error:', e);
+      return null;
     }
-    return null;
-  };
-
-  const value = {
-    isAuthenticated,
-    user,
-    userStatus,
-    loading,
-    signIn,
-    signOut,
-    refreshUserStatus,
   };
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider value={{ isAuthenticated, user, userStatus, loading, signIn, signOut, refreshUserStatus }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
-  }
-  return context;
+  return useContext(AuthContext);
 }

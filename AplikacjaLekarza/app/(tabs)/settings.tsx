@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, Alert, Switch } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Alert, Switch, Platform } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useAuth } from '@/src/context/AuthContext';
 import { useRouter } from 'expo-router';
@@ -63,10 +63,16 @@ export default function SettingsScreen() {
   const styles = useMemo(() => makeStyles(C), [C]);
 
   const handleLogout = () => {
-    Alert.alert('Wyloguj', 'Czy na pewno chcesz się wylogować?', [
-      { text: 'Anuluj', style: 'cancel' },
-      { text: 'Wyloguj', style: 'destructive', onPress: signOut },
-    ]);
+    if (Platform.OS === 'web') {
+      if (window.confirm('Czy na pewno chcesz się wylogować?')) {
+        signOut();
+      }
+    } else {
+      Alert.alert('Wyloguj', 'Czy na pewno chcesz się wylogować?', [
+        { text: 'Anuluj', style: 'cancel' },
+        { text: 'Wyloguj', style: 'destructive', onPress: signOut },
+      ]);
+    }
   };
 
   return (

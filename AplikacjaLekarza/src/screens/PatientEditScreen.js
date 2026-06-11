@@ -65,7 +65,7 @@ export default function PatientEditScreen() {
 
   const loadPatient = async () => {
     try {
-      const p = await fetchPatientById(params.patientId);
+      const p = await fetchPatientById(params.patientId, user?.id);
       setFirstName(p.firstName || '');
       setLastName(p.lastName || '');
       setPesel(p.pesel || '');
@@ -98,9 +98,9 @@ export default function PatientEditScreen() {
         diagnosis, medicalHistory, currentMedications,
       };
       if (isEditMode) {
-        await updatePatient(params.patientId, patientData);
+        await updatePatient(params.patientId, patientData, user?.id);
       } else {
-        await addPatient(patientData);
+        await addPatient(patientData, user?.id);
       }
       setSnackbarVisible(true);
       setTimeout(() => router.back(), 1500);

@@ -7,6 +7,7 @@ import { useFocusEffect } from 'expo-router';
 import { fetchAllPatients } from '@/src/services/patientService';
 import { fetchMarkedDates } from '@/src/services/visitService';
 import { useColors } from '@/src/context/ThemeContext';
+import { useAuth } from '@/src/context/AuthContext';
 
 function StatCard({ value, label, color, delay = 0 }: { value: string | number; label: string; color?: string; delay?: number }) {
   const C = useColors();
@@ -32,6 +33,7 @@ function SectionTitle({ title, delay = 0 }: { title: string; delay?: number }) {
 export default function StatsScreen() {
   const C = useColors();
   const styles = useMemo(() => makeStyles(C), [C]);
+  const { user } = useAuth() as any;
 
   const [loading, setLoading] = useState(true);
   const [patients, setPatients] = useState<any[]>([]);
@@ -39,14 +41,15 @@ export default function StatsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
-    }, [])
+      if (user?.id) loadData();
+    }, [user?.id])
   );
 
   const loadData = async () => {
+    if (!user?.id) return;
     setLoading(true);
     try {
-      const [p, d] = await Promise.all([fetchAllPatients(), fetchMarkedDates()]);
+      const [p, d] = await Promise.all([fetchAllPatients(user.id), fetchMarkedDates(user.id)]);
       setPatients(p);
       setVisitDates(d);
     } catch (e) {

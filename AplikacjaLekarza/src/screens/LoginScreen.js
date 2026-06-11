@@ -11,10 +11,11 @@ export default function LoginScreen() {
   const C = useColors();
   const styles = React.useMemo(() => makeStyles(C), [C]);
 
-  const [email, setEmail] = useState('dr.kowalski@example.com');
+  const [email, setEmail] = useState('lekarz@telemed.pl');
   const [password, setPassword] = useState('password123');
   const [loading, setLoading] = useState(false);
   const [showRegistration, setShowRegistration] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   // Registration fields
   const [regEmail, setRegEmail] = useState('');
@@ -32,20 +33,15 @@ export default function LoginScreen() {
       return;
     }
 
+    setErrorMsg('');
     try {
       setLoading(true);
       const result = await signIn(email, password);
-      
       if (result.status === 'pending') {
-        Alert.alert('Oczekiwanie', 'Twoje konto czeka na potwierdzenie przez administratora');
-        // Navigation will be handled by _layout.tsx
-      } else if (result.status === 'approved') {
-        // Navigation will be handled by _layout.tsx
-      } else if (result.status === 'rejected') {
-        Alert.alert('Błąd', 'Twoje konto zostało odrzucone. Skontaktuj się z administratorem.');
+        setErrorMsg('Konto czeka na potwierdzenie przez administratora.');
       }
     } catch (error) {
-      Alert.alert('Błąd logowania', error.message);
+      setErrorMsg(error.message || 'Błąd logowania. Sprawdź dane i połączenie.');
     } finally {
       setLoading(false);
     }
@@ -53,36 +49,41 @@ export default function LoginScreen() {
 
   const handleRegister = async () => {
     if (!regEmail || !regPassword || !regFirstName || !regLastName) {
-      Alert.alert('Błąd', 'Wypełnij wszystkie pola');
+      Alert.alert('Błąd', 'Imię, nazwisko, email i hasło są wymagane.');
+      return;
+    }
+    if (regPassword.length < 6) {
+      Alert.alert('Błąd', 'Hasło musi mieć min. 6 znaków.');
       return;
     }
 
     try {
       setLoading(true);
-      const response = await fetch('http://192.168.0.31:3001/auth/register', {
+      const API_URL = Platform.OS === 'web' ? '/api' : 'http://192.168.0.31:3001';
+      const response = await fetch(`${API_URL}/users`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
         body: JSON.stringify({
           email: regEmail,
-          password: regPassword,
-          firstName: regFirstName,
-          lastName: regLastName,
-          specialization: regSpecialization,
-          pwzNumber: regPWZ,
-          nip: regNIP,
-          clinicName: regClinic,
+          password_hash: regPassword, // plain text MVP — hash in production
+          first_name: regFirstName,
+          last_name: regLastName,
+          specialization: regSpecialization || null,
+          pwz_number: regPWZ || null,
+          nip: regNIP || null,
+          clinic_name: regClinic || null,
+          status: 'pending',
         }),
       });
 
-      if (!response.ok) throw new Error('Rejestracja nie powiodła się');
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.message || `Błąd ${response.status}`);
+      }
 
-      Alert.alert(
-        'Sukces',
-        'Rejestracja przesłana! Twoje konto czeka na potwierdzenie przez administratora.'
-      );
+      Alert.alert('Sukces', 'Rejestracja przesłana! Konto czeka na potwierdzenie przez administratora.');
       setShowRegistration(false);
-      setRegEmail('');
-      setRegPassword('');
+      setRegEmail(''); setRegPassword(''); setRegFirstName(''); setRegLastName('');
     } catch (error) {
       Alert.alert('Błąd rejestracji', error.message);
     } finally {
@@ -225,6 +226,12 @@ export default function LoginScreen() {
             editable={!loading}
           />
 
+          {!!errorMsg && (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>{errorMsg}</Text>
+            </View>
+          )}
+
           <Pressable
             onPress={handleLogin}
             style={[styles.btn, loading && styles.btnDisabled]}
@@ -267,17 +274,17 @@ function makeStyles(C) { return StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 22,
-    backgroundColor: '#0F6E56',
+    backgroundColor: C.accentDim,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#0ABFA3',
+    borderColor: C.accent,
   },
-  logoIcon: { fontSize: 32, color: '#0ABFA3' },
+  logoIcon: { fontSize: 32, color: C.accent },
   title: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#E8F0F7',
+    color: C.text,
     letterSpacing: -0.5,
     marginBottom: 6,
   },
@@ -305,13 +312,13 @@ function makeStyles(C) { return StyleSheet.create({
     borderColor: C.border,
     borderRadius: 12,
     padding: 12,
-    color: '#E8F0F7',
+    color: C.text,
     marginBottom: 12,
     fontSize: 14,
   },
   btn: {
     width: '100%',
-    backgroundColor: '#0ABFA3',
+    backgroundColor: C.accent,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
@@ -319,6 +326,15 @@ function makeStyles(C) { return StyleSheet.create({
   },
   btnDisabled: { opacity: 0.6 },
   btnText: { fontSize: 15, fontWeight: '700', color: '#fff', letterSpacing: 0.2 },
-  linkText: { fontSize: 13, color: '#0ABFA3', textAlign: 'center', marginTop: 12 },
-  version: { fontSize: 11, color: '#1C2B40', letterSpacing: 0.5, marginTop: 32 },
+  linkText: { fontSize: 13, color: C.accent, textAlign: 'center', marginTop: 12 },
+  version: { fontSize: 11, color: C.muted, letterSpacing: 0.5, marginTop: 32 },
+  errorBox: {
+    backgroundColor: '#4A1B0C',
+    borderWidth: 1,
+    borderColor: '#E87060',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+  },
+  errorText: { fontSize: 13, color: '#E87060', textAlign: 'center' },
 }); }

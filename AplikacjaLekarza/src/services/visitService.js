@@ -1,6 +1,7 @@
+import { Platform } from 'react-native';
 import { getCache, setCache, queuePendingOp, isNetworkError } from './offlineCache';
 
-const API_URL = typeof window !== 'undefined' ? '/api' : 'http://192.168.0.31:3001';
+const API_URL = Platform.OS === 'web' ? '/api' : 'http://192.168.0.31:3001';
 
 const mapVisit = (v) => ({
   id: v.id,
@@ -23,9 +24,19 @@ export const fetchVisitsByDate = async (date, doctorId) => {
   if (!doctorId) throw new Error('Doctor ID is required');
   
   try {
+    // Encode the complex select parameter because Android OkHttp rejects unencoded commas and parentheses in URLs
+    const selectParam = encodeURIComponent('*,patients(first_name,last_name,age,pesel)');
+    const query = `visit_date=eq.${date}&doctor_id=eq.${doctorId}&order=visit_time.asc&select=${selectParam}`;
     const r = await fetch(
-      `${API_URL}/visits?visit_date=eq.${date}&doctor_id=eq.${doctorId}&order=visit_time.asc&select=*,patients(first_name,last_name,age,pesel)`,
-      { headers: { 'Content-Type': 'application/json' } }
+      `${API_URL}/visits?${query}`,
+      { 
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        } 
+      }
     );
     if (!r.ok) throw new Error('Failed to fetch visits');
     const data = await r.json();
@@ -63,13 +74,18 @@ export const fetchVisitsByDate = async (date, doctorId) => {
  * Fetch all marked dates (dates with visits) for current doctor
  */
 export const fetchMarkedDates = async (doctorId) => {
-  if (!doctorId) throw new Error('Doctor ID is required');
-  
+  if (!doctorId) return {};
   try {
-    // Get all visits for this doctor
     const r = await fetch(
       `${API_URL}/visits?doctor_id=eq.${doctorId}&select=visit_date`,
-      { headers: { 'Content-Type': 'application/json' } }
+      { 
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        } 
+      }
     );
     if (!r.ok) throw new Error('Failed to fetch dates');
     const data = await r.json();

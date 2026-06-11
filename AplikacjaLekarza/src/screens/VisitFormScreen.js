@@ -4,6 +4,8 @@ import { TextInput, ActivityIndicator, Snackbar } from 'react-native-paper';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { saveVisitSOAP } from '../services/visitService';
+import { useContext } from 'react';
+import { AuthContext } from '../context/AuthContext';
 
 const C = {
   bg: '#0B1220',
@@ -29,11 +31,12 @@ const INPUT_THEME = {
 export default function VisitFormScreen() {
   const params = useLocalSearchParams();
   const router = useRouter();
+  const { user } = useContext(AuthContext);
 
-  const [subjective, setSubjective] = useState('');
-  const [objective, setObjective] = useState('');
-  const [assessment, setAssessment] = useState('');
-  const [plan, setPlan] = useState('');
+  const [subjective, setSubjective] = useState(params.subjective || '');
+  const [objective, setObjective] = useState(params.objective || '');
+  const [assessment, setAssessment] = useState(params.assessment || '');
+  const [plan, setPlan] = useState(params.plan || '');
   const [loading, setLoading] = useState(false);
   const [snackbarVisible, setSnackbarVisible] = useState(false);
 
@@ -56,7 +59,7 @@ export default function VisitFormScreen() {
     setLoading(true);
     try {
       if (params.visitId) {
-        await saveVisitSOAP(params.visitId, { subjective, objective, assessment, plan });
+        await saveVisitSOAP(params.visitId, { subjective, objective, assessment, plan }, user?.id);
       }
       setSnackbarVisible(true);
       setTimeout(() => router.back(), 1500);

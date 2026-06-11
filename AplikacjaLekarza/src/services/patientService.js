@@ -1,6 +1,7 @@
+import { Platform } from 'react-native';
 import { getCache, setCache, queuePendingOp, isNetworkError, clearCacheIfNeeded, prepareForOfflineCache } from './offlineCache';
 
-const API_URL = typeof window !== 'undefined' ? '/api' : 'http://192.168.0.31:3001';
+const API_URL = Platform.OS === 'web' ? '/api' : 'http://192.168.0.31:3001';
 
 const mapPatient = (p) => ({
   id: p.id,

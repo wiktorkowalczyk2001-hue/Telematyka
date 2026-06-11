@@ -7,6 +7,7 @@ import { fetchPatientById, deletePatient } from '@/src/services/patientService';
 import { fetchPatientVisits } from '@/src/services/visitService';
 import { useAIContext } from '@/src/context/AIContext';
 import { useColors } from '@/src/context/ThemeContext';
+import { useAuth } from '@/src/context/AuthContext';
 
 const AVATAR_COLORS = [
   { bg: '#0F6E56', fg: '#9FE1CB' },
@@ -59,6 +60,7 @@ export default function PatientDetailsScreen() {
   const styles = useMemo(() => makeStyles(C), [C]);
   const { id } = useLocalSearchParams();
   const router = useRouter();
+  const { user } = useAuth() as any;
   const [patient, setPatient] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,16 +71,18 @@ export default function PatientDetailsScreen() {
   const { setAIContext } = useAIContext();
 
   useEffect(() => {
-    loadPatientDetails();
-    loadVisits();
-  }, [id]);
+    if (user?.id) {
+      loadPatientDetails();
+      loadVisits();
+    }
+  }, [id, user?.id]);
 
   const loadPatientDetails = async () => {
     try {
       setLoading(true);
       setError(null);
       if (id) {
-        const data = await fetchPatientById(id as string);
+        const data = await fetchPatientById(id as string, user.id);
         setPatient(data);
         setAIContext({
           screen: 'patient_detail',
@@ -101,7 +105,7 @@ export default function PatientDetailsScreen() {
 
   const loadVisits = async () => {
     try {
-      const data = await fetchPatientVisits(id as string);
+      const data = await fetchPatientVisits(id as string, user.id);
       setVisits(data);
     } catch (e) {
       console.error(e);
@@ -115,7 +119,7 @@ export default function PatientDetailsScreen() {
   const handleDeleteConfirm = async () => {
     setDeleting(true);
     try {
-      await deletePatient(id as string);
+      await deletePatient(id as string, user.id);
       setDeleteDialogVisible(false);
       router.back();
     } catch (e) {

@@ -9,8 +9,9 @@ import Animated, {
   useSharedValue, useAnimatedStyle, withRepeat, withTiming, withSequence,
 } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
-import { sendMessage } from '@/src/services/aiAssistantService';
+import { sendMessage, runDemoStep } from '@/src/services/aiAssistantService';
 import { useColors } from '@/src/context/ThemeContext';
+import { useAuth } from '@/src/context/AuthContext';
 
 type StreamState = 'idle' | 'streaming' | 'tool_executing';
 
@@ -35,10 +36,11 @@ function TypingDots() {
   );
 }
 
-function MessageBubble({ msg, streamState, streamedText }: {
+function MessageBubble({ msg, streamState, streamedText, toolLabel }: {
   msg: Message;
   streamState?: StreamState;
   streamedText?: string;
+  toolLabel?: string;
 }) {
   const C = useColors();
   const styles = useMemo(() => makeStyles(C), [C]);
@@ -48,17 +50,16 @@ function MessageBubble({ msg, streamState, streamedText }: {
   if (msg.loading) {
     if (streamState === 'tool_executing') {
       bodyContent = (
-        <Text style={[styles.bubbleText, { color: C.accent, fontStyle: 'italic', fontSize: 12 }]}>
-          🔧 Przetwarzam dane…
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <ActivityIndicator size="small" color={C.accent} />
+          <Text style={[styles.bubbleText, { color: C.accent, fontStyle: 'italic', fontSize: 13 }]}>
+            {toolLabel || 'Przetwarzam…'}
+          </Text>
+        </View>
       );
     } else if (streamState === 'streaming' && streamedText) {
-      // Filter out any partial [TOOL_REQUEST] that starts appearing
-      const visible = streamedText.replace(/\[TOOL_REQUEST\][\s\S]*$/, '').trim();
-      bodyContent = visible ? (
-        <Text style={styles.bubbleText}>{visible}<Text style={{ opacity: 0.4 }}>▌</Text></Text>
-      ) : (
-        <TypingDots />
+      bodyContent = (
+        <Text style={styles.bubbleText}>{streamedText}<Text style={{ opacity: 0.4 }}>▌</Text></Text>
       );
     } else {
       bodyContent = <TypingDots />;
@@ -117,6 +118,7 @@ export default function AIAssistantScreen() {
   const C = useColors();
   const styles = useMemo(() => makeStyles(C), [C]);
   const router = useRouter();
+  const { user } = useAuth() as any;
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -131,9 +133,12 @@ export default function AIAssistantScreen() {
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [streamState, setStreamState] = useState<StreamState>('idle');
   const [streamedText, setStreamedText] = useState('');
+  const [toolLabel, setToolLabel] = useState('');
 
   const scrollRef = useRef<ScrollView>(null);
   const recognitionRef = useRef<any>(null);
+  // -1 = normal mode; 0-3 = demo step to execute next
+  const demoStepRef = useRef<number>(-1);
   const micScale = useSharedValue(1);
   const micStyle = useAnimatedStyle(() => ({ transform: [{ scale: micScale.value }] }));
 
@@ -205,6 +210,7 @@ export default function AIAssistantScreen() {
     setIsSending(true);
     setStreamState('idle');
     setStreamedText('');
+    setToolLabel('');
 
     const userMsg: Message = { id: Date.now().toString(), role: 'user', content: userText };
     const loadingId = 'loading-' + Date.now();
@@ -213,25 +219,41 @@ export default function AIAssistantScreen() {
     setMessages(prev => [...prev, userMsg, loadingMsg]);
     scrollToBottom();
 
+    // Skip the synthetic welcome message (id '0') — it's UI-only, not a real AI turn
     const history = messages
-      .filter(m => !m.loading)
+      .filter(m => !m.loading && m.id !== '0')
       .map(m => ({ role: m.role, content: m.content }));
 
     try {
-      const result = await sendMessage(
-        [...history, { role: 'user', content: userText }],
-        (delta: string | null) => {
-          if (delta === null) {
-            // Tool executing phase
-            setStreamState('tool_executing');
-            setStreamedText('');
-          } else {
-            setStreamState('streaming');
-            setStreamedText(delta);
-          }
+      const callbacks = {
+        onToken: (text: string) => {
+          setStreamState('streaming');
+          setStreamedText(text);
           scrollToBottom();
         },
-      );
+        onTool: (label: string) => {
+          setStreamState('tool_executing');
+          setToolLabel(label);
+          setStreamedText('');
+          scrollToBottom();
+        },
+      };
+      const ctx = { doctorId: user?.id };
+
+      // Demo mode: "hej" activates step 0; each subsequent message advances one step.
+      // Steps 0-3 use real DB calls but scripted AI text. Step 4+ exits demo mode.
+      if (userText.trim().toLowerCase() === 'hej' && demoStepRef.current === -1) {
+        demoStepRef.current = 0;
+      }
+
+      let result;
+      if (demoStepRef.current >= 0) {
+        const currentStep = demoStepRef.current;
+        demoStepRef.current = currentStep < 3 ? currentStep + 1 : -1;
+        result = await runDemoStep(currentStep, callbacks, ctx);
+      } else {
+        result = await sendMessage([...history, { role: 'user', content: userText }], callbacks, ctx);
+      }
 
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -242,6 +264,7 @@ export default function AIAssistantScreen() {
 
       setStreamState('idle');
       setStreamedText('');
+      setToolLabel('');
       setMessages(prev => [...prev.filter(m => m.id !== loadingId), aiMsg]);
       scrollToBottom();
       speak(result.content);
@@ -249,11 +272,12 @@ export default function AIAssistantScreen() {
       const isCors = e.message?.includes('Failed to fetch') || e.message?.includes('NetworkError');
       setStreamState('idle');
       setStreamedText('');
+      setToolLabel('');
       const errMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: isCors
-          ? 'Błąd CORS — przeglądarka blokuje LM Studio.\n\nW LM Studio: Server → ⚙️ → włącz "Allow CORS" → restart serwera.'
+          ? 'Nie mogę połączyć się z LM Studio.\n\nSprawdź czy serwer LM Studio działa, model jest załadowany, a w ustawieniach serwera włączone jest "Allow CORS".'
           : `Błąd: ${e.message}`,
       };
       setMessages(prev => [...prev.filter(m => m.id !== loadingId), errMsg]);
@@ -261,7 +285,7 @@ export default function AIAssistantScreen() {
     } finally {
       setIsSending(false);
     }
-  }, [isSending, messages, speak, stopSpeech, scrollToBottom]);
+  }, [isSending, messages, speak, stopSpeech, scrollToBottom, user?.id]);
 
   const startListening = useCallback(async () => {
     if (Platform.OS !== 'web') {
@@ -376,17 +400,18 @@ export default function AIAssistantScreen() {
             msg={msg}
             streamState={msg.id === loadingId ? streamState : undefined}
             streamedText={msg.id === loadingId ? streamedText : undefined}
+            toolLabel={msg.id === loadingId ? toolLabel : undefined}
           />
         ))}
         <View style={{ height: 16 }} />
       </ScrollView>
 
       <Animated.View entering={FadeInDown.delay(200).springify()} style={styles.inputBar}>
-        <Animated.View style={[styles.micBtn, isListening && styles.micBtnActive, micStyle]}>
-          <Pressable onPress={handleMic} style={styles.micPressable}>
+        <Pressable onPress={handleMic} style={[styles.micBtn, isListening && styles.micBtnActive]}>
+          <Animated.View style={[styles.micPressable, micStyle]}>
             <Text style={styles.micIcon}>{isListening ? '⏹' : '🎤'}</Text>
-          </Pressable>
-        </Animated.View>
+          </Animated.View>
+        </Pressable>
 
         <TextInput
           style={styles.textInput}

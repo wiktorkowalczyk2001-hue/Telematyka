@@ -11,6 +11,7 @@ import { fetchAllPatients, searchPatients } from '@/src/services/patientService'
 import { useAIContext } from '@/src/context/AIContext';
 import ScreenHeader from '@/src/components/ScreenHeader';
 import { useColors } from '@/src/context/ThemeContext';
+import { useAuth } from '@/src/context/AuthContext';
 
 const AVATAR_COLORS = [
   { bg: '#0F6E56', fg: '#9FE1CB' },
@@ -142,6 +143,7 @@ export default function PatientListScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const router = useRouter();
   const { setAIContext } = useAIContext();
+  const { user } = useAuth() as any;
 
   useFocusEffect(
     useCallback(() => {
@@ -151,10 +153,11 @@ export default function PatientListScreen() {
   );
 
   const loadPatients = async () => {
+    if (!user?.id) { setError('Brak danych użytkownika. Zaloguj się ponownie.'); setLoading(false); return; }
     try {
       setLoading(true);
       setError(null);
-      const data = await fetchAllPatients();
+      const data = await fetchAllPatients(user.id);
       setPatients(data);
       setAIContext({ screen: 'patients', screenLabel: 'Lista Pacjentów', totalPatients: data.length });
     } catch (err: any) {
@@ -167,9 +170,10 @@ export default function PatientListScreen() {
 
   const handleSearch = async (query: string) => {
     setSearchQuery(query);
+    if (!user?.id) return;
     try {
       setLoading(true);
-      const data = query.trim() ? await searchPatients(query) : await fetchAllPatients();
+      const data = query.trim() ? await searchPatients(query, user.id) : await fetchAllPatients(user.id);
       setPatients(data);
     } catch (e) {
       console.error(e);

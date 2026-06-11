@@ -15,7 +15,8 @@ const MAX_CACHE_SIZE = 5 * 1024 * 1024;
 
 export const getCache = async (key) => {
   try {
-    const raw = await AsyncStorage.getItem(KEYS[key]);
+    const actualKey = KEYS[key] || key;
+    const raw = await AsyncStorage.getItem(actualKey);
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
 };
@@ -23,7 +24,7 @@ export const getCache = async (key) => {
 export const setCache = async (key, data) => {
   try {
     const serialized = JSON.stringify(data);
-    const size = new Blob([serialized]).size;
+    const size = serialized.length;
 
     // Check if adding this would exceed limit
     if (size > MAX_CACHE_SIZE) {
@@ -31,7 +32,8 @@ export const setCache = async (key, data) => {
       return;
     }
 
-    await AsyncStorage.setItem(KEYS[key], serialized);
+    const actualKey = KEYS[key] || key;
+    await AsyncStorage.setItem(actualKey, serialized);
     // Track cache size
     const totalSize = await calculateCacheSize();
     await AsyncStorage.setItem(KEYS.cacheSize, totalSize.toString());
@@ -45,7 +47,7 @@ export const calculateCacheSize = async () => {
   for (const key of Object.values(KEYS)) {
     try {
       const data = await AsyncStorage.getItem(key);
-      if (data) totalSize += new Blob([data]).size;
+      if (data) totalSize += data.length;
     } catch {}
   }
   return totalSize;

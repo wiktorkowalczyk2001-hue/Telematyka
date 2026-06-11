@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useContext } from 'react';
-import { StyleSheet, View, FlatList, Alert, Text, Pressable, Platform, PanResponder } from 'react-native';
+import { StyleSheet, View, FlatList, ScrollView, Alert, Text, Pressable, Platform, PanResponder } from 'react-native';
 import { ActivityIndicator, Modal, Portal, TextInput, Button, List } from 'react-native-paper';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
 
@@ -54,6 +54,25 @@ LocaleConfig.locales['pl'] = {
 };
 LocaleConfig.defaultLocale = 'pl';
 
+const DAY_NAMES = ['Nd', 'Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'Sb'];
+
+function formatDateDisplay(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return `${DAY_NAMES[date.getDay()]} ${d}.${String(m).padStart(2, '0')}.${y}`;
+}
+
+function getNextDates(from, count = 90) {
+  const [y, m, d] = from.split('-').map(Number);
+  const start = new Date(y, m - 1, d);
+  return Array.from({ length: count }, (_, i) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + i);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  });
+}
+
 export default function CalendarScreen() {
   const C = useColors();
   const styles = React.useMemo(() => makeStyles(C), [C]);
@@ -65,6 +84,8 @@ export default function CalendarScreen() {
   const [appointments, setAppointments] = useState([]);
   const [visitCounts, setVisitCounts] = useState({});
   const [loadingList, setLoadingList] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [debugInfo, setDebugInfo] = useState('');
 
   const [modalVisible, setModalVisible] = useState(false);
   const [patients, setPatients] = useState([]);
@@ -73,6 +94,11 @@ export default function CalendarScreen() {
   const [newReason, setNewReason] = useState('');
   const [savingVisit, setSavingVisit] = useState(false);
   const [patientPickerVisible, setPatientPickerVisible] = useState(false);
+  const [timeModalVisible, setTimeModalVisible] = useState(false);
+  const [pickerHour, setPickerHour] = useState(8);
+  const [pickerMinute, setPickerMinute] = useState(0);
+  const [newDate, setNewDate] = useState('');
+  const [dateModalVisible, setDateModalVisible] = useState(false);
 
   const { setAIContext } = useAIContext();
 
@@ -129,14 +155,21 @@ export default function CalendarScreen() {
 
   const loadAppointments = async (date) => {
     setLoadingList(true);
+    setErrorMsg('');
+    setDebugInfo(`Fetching for ${date}...`);
     try {
       if (!user?.id) {
         setAppointments([]);
+        setDebugInfo('No user ID.');
         return;
       }
       const data = await fetchVisitsByDate(date, user.id); // Pass doctorId
+      setDebugInfo(`Success. Date: ${date}. Fetched length: ${data ? data.length : 'undefined'}`);
       setAppointments(data);
     } catch (e) {
+      console.error('loadAppointments error:', e);
+      setErrorMsg(e.message || String(e));
+      setDebugInfo(`Error for ${date}`);
       setAppointments([]);
     } finally {
       setLoadingList(false);
@@ -168,10 +201,6 @@ export default function CalendarScreen() {
   };
 
   const handleStartVisit = (appt) => {
-    if (selectedDate !== today) {
-      Alert.alert('Niedozwolone', 'Możesz rozpocząć wizytę tylko z dzisiejszego dnia.');
-      return;
-    }
     router.push({
       pathname: '/visit-form',
       params: {
@@ -180,32 +209,35 @@ export default function CalendarScreen() {
         patientName: appt.patientName,
         patientAge: appt.patientAge,
         patientPesel: appt.patientPesel,
+        subjective: appt.soapSubjective || '',
+        objective: appt.soapObjective || '',
+        assessment: appt.soapAssessment || '',
+        plan: appt.soapPlan || '',
       },
     });
   };
 
+  const [visitToDelete, setVisitToDelete] = useState(null);
+
   const handleDeleteVisit = (appt) => {
-    Alert.alert(
-      'Usuń wizytę',
-      `Usunąć wizytę ${appt.visitTime} – ${appt.patientName}?`,
-      [
-        { text: 'Anuluj', style: 'cancel' },
-        {
-          text: 'Usuń',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              if (!user?.id) return;
-              await deleteVisit(appt.id, user.id); // Pass doctorId
-              loadAppointments(selectedDate);
-              loadMarkedDates();
-            } catch (e) {
-              Alert.alert('Błąd', 'Nie udało się usunąć wizyty.');
-            }
-          },
-        },
-      ]
-    );
+    setVisitToDelete(appt);
+  };
+
+  const confirmDeleteVisit = async () => {
+    if (!visitToDelete || !user?.id) return;
+    try {
+      setDebugInfo(`Confirming delete for: ${visitToDelete.id}`);
+      await deleteVisit(visitToDelete.id, user.id);
+      setDebugInfo(`Deleted ${visitToDelete.id}. Loading apps...`);
+      loadAppointments(selectedDate);
+      loadMarkedDates();
+    } catch (e) {
+      console.error(e);
+      setDebugInfo(`Delete error: ${e.message}`);
+      Alert.alert('Błąd', 'Nie udało się usunąć wizyty: ' + String(e.message || e));
+    } finally {
+      setVisitToDelete(null);
+    }
   };
 
   const openAddModal = async () => {
@@ -218,40 +250,46 @@ export default function CalendarScreen() {
       return;
     }
     setSelectedPatient(null);
-    setNewTime('');
+    setNewDate(selectedDate);
+    setNewTime('08:00');
+    setPickerHour(8);
+    setPickerMinute(0);
     setNewReason('');
     setModalVisible(true);
   };
 
   const handleSaveVisit = async () => {
-    if (!selectedPatient || !newTime || !user?.id) {
-      Alert.alert('Błąd', 'Wybierz pacjenta i podaj godzinę.');
+    if (!selectedPatient || !newDate || !newTime || !user?.id) {
+      Alert.alert('Błąd', 'Wybierz pacjenta, datę i godzinę.');
       return;
     }
-    const conflict = appointments.find((a) => a.visitTime === newTime);
-    if (conflict) {
-      Alert.alert('Konflikt godzinowy', `O ${newTime} masz już wizytę z ${conflict.patientName}. Wybierz inną godzinę.`);
-      return;
+    if (newDate === selectedDate) {
+      const conflict = appointments.find((a) => a.visitTime === newTime);
+      if (conflict) {
+        Alert.alert('Konflikt godzinowy', `O ${newTime} masz już wizytę z ${conflict.patientName}. Wybierz inną godzinę.`);
+        return;
+      }
     }
     setSavingVisit(true);
     try {
       const newVisit = await addVisit({
         patientId: selectedPatient.id,
-        visitDate: selectedDate,
+        visitDate: newDate,
         visitTime: newTime,
         reason: newReason || 'Brak wpisu',
-      }, user.id); // Pass doctorId
+      }, user.id);
       if (newVisit?.id && newTime) {
         scheduleVisitReminder({
           visitId: newVisit.id,
           patientName: `${selectedPatient.firstName} ${selectedPatient.lastName}`,
-          visitDate: selectedDate,
+          visitDate: newDate,
           visitTime: newTime,
           reason: newReason,
         });
       }
       setModalVisible(false);
-      loadAppointments(selectedDate);
+      setSelectedDate(newDate);
+      loadAppointments(newDate);
       loadMarkedDates();
     } catch (e) {
       Alert.alert('Błąd', 'Nie udało się zapisać wizyty.');
@@ -263,10 +301,7 @@ export default function CalendarScreen() {
   const isToday = selectedDate === today;
 
   const ApptCard = ({ item, index }) => (
-    <Animated.View
-      entering={FadeInDown.delay(index * 60).springify().damping(16).stiffness(120)}
-      style={styles.apptCard}
-    >
+    <View style={styles.apptCard}>
       <View style={styles.apptTop}>
         <Text style={styles.apptTime} numberOfLines={1}>
           {item.visitTime} – <Text style={styles.apptName}>{item.patientName}</Text>
@@ -286,14 +321,18 @@ export default function CalendarScreen() {
       <View style={styles.apptBottom}>
         <Pressable
           onPress={() => handleStartVisit(item)}
-          style={({ pressed }) => [styles.startBtn, !isToday && styles.startBtnDisabled, pressed && { opacity: 0.75 }]}
+          style={({ pressed }) => [
+            styles.startBtn, 
+            !isToday && { backgroundColor: C.dim }, 
+            pressed && { opacity: 0.75 }
+          ]}
         >
-          <Text style={[styles.startBtnText, !isToday && styles.startBtnTextDisabled]}>
-            {isToday ? 'Rozpocznij wizytę' : 'Nie dzisiaj'}
+          <Text style={styles.startBtnText}>
+            {isToday ? 'Rozpocznij wizytę' : 'Zobacz / Edytuj wizytę'}
           </Text>
         </Pressable>
       </View>
-    </Animated.View>
+    </View>
   );
 
   const renderAppointment = ({ item, index }) => (
@@ -328,6 +367,10 @@ export default function CalendarScreen() {
           </Pressable>
         </View>
 
+        <Text style={{ fontSize: 10, color: 'red', textAlign: 'center', marginBottom: 5 }}>
+          DEBUG: {debugInfo}
+        </Text>
+
         {loadingList ? (
           <View style={styles.loaderWrap}>
             <ActivityIndicator animating color={C.accent} />
@@ -341,21 +384,24 @@ export default function CalendarScreen() {
             showsVerticalScrollIndicator={false}
           />
         ) : (
-          <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.emptyWrap}>
-            <Animated.View entering={ZoomIn.delay(200).springify()} style={styles.emptyIconWrap}>
-              <Text style={styles.emptyIconText}>📅</Text>
+            <Animated.View entering={FadeInDown.delay(100).springify()} style={styles.emptyWrap}>
+              <Animated.View entering={ZoomIn.delay(200).springify()} style={styles.emptyIconWrap}>
+                <Text style={styles.emptyIconText}>📅</Text>
+              </Animated.View>
+              <Text style={styles.emptyTitle}>Brak wizyt</Text>
+              <Text style={styles.emptyText}>
+                {errorMsg ? `Błąd pobierania: ${errorMsg}` : isToday ? 'Brak wizyt na dziś — naciśnij + Dodaj' : `Brak wizyt na ${selectedDate}`}
+              </Text>
+              <Text style={{ marginTop: 10, fontSize: 10, color: 'red', textAlign: 'center' }}>
+                DEBUG: {debugInfo}
+              </Text>
             </Animated.View>
-            <Text style={styles.emptyTitle}>Brak wizyt</Text>
-            <Text style={styles.emptyText}>
-              {isToday ? 'Brak wizyt na dziś — naciśnij + Dodaj' : `Brak wizyt na ${selectedDate}`}
-            </Text>
-          </Animated.View>
         )}
       </View>
 
       <Portal>
         <Modal visible={modalVisible} onDismiss={() => setModalVisible(false)} contentContainerStyle={styles.modal}>
-          <Text style={styles.modalTitle}>Dodaj wizytę · {selectedDate}</Text>
+          <Text style={styles.modalTitle}>Dodaj wizytę</Text>
           <Pressable
             onPress={() => setPatientPickerVisible(true)}
             style={styles.patientPicker}
@@ -364,15 +410,70 @@ export default function CalendarScreen() {
               {selectedPatient ? `${selectedPatient.firstName} ${selectedPatient.lastName}` : 'Wybierz pacjenta...'}
             </Text>
           </Pressable>
-          <TextInput
-            label="Godzina (np. 14:00)"
-            value={newTime}
-            onChangeText={setNewTime}
-            mode="outlined"
-            style={styles.modalInput}
-            theme={{ colors: { primary: C.accent, background: C.surface, onSurfaceVariant: C.muted, outline: C.border } }}
-            textColor={C.text}
-          />
+          {Platform.OS === 'web' ? (
+            <View style={styles.webTimeWrap}>
+              <Text style={styles.webTimeLabel}>Data</Text>
+              {/* @ts-ignore */}
+              <input
+                type="date"
+                value={newDate}
+                onChange={(e) => setNewDate(e.target.value)}
+                style={{
+                  backgroundColor: '#0B1220',
+                  color: '#E8F0F7',
+                  border: '1px solid #1C2B40',
+                  borderRadius: 8,
+                  padding: '12px 14px',
+                  fontSize: 15,
+                  fontWeight: '600',
+                  width: '100%',
+                  outline: 'none',
+                  cursor: 'pointer',
+                  colorScheme: 'dark',
+                  boxSizing: 'border-box',
+                  marginTop: 4,
+                }}
+              />
+            </View>
+          ) : (
+            <Pressable onPress={() => setDateModalVisible(true)} style={styles.patientPicker}>
+              <Text style={[styles.patientPickerText, !newDate && { color: C.dim }]}>
+                {newDate ? formatDateDisplay(newDate) : 'Wybierz datę...'}
+              </Text>
+            </Pressable>
+          )}
+          {Platform.OS === 'web' ? (
+            <View style={styles.webTimeWrap}>
+              <Text style={styles.webTimeLabel}>Godzina</Text>
+              {/* @ts-ignore — web-only input element */}
+              <input
+                type="time"
+                value={newTime}
+                onChange={(e) => setNewTime(e.target.value)}
+                style={{
+                  backgroundColor: '#0B1220',
+                  color: '#E8F0F7',
+                  border: '1px solid #1C2B40',
+                  borderRadius: 8,
+                  padding: '12px 14px',
+                  fontSize: 15,
+                  fontWeight: '600',
+                  width: '100%',
+                  outline: 'none',
+                  cursor: 'pointer',
+                  colorScheme: 'dark',
+                  boxSizing: 'border-box',
+                  marginTop: 4,
+                }}
+              />
+            </View>
+          ) : (
+            <Pressable onPress={() => setTimeModalVisible(true)} style={styles.patientPicker}>
+              <Text style={[styles.patientPickerText, !newTime && { color: C.dim }]}>
+                {newTime || 'Wybierz godzinę...'}
+              </Text>
+            </Pressable>
+          )}
           <TextInput
             label="Powód wizyty"
             value={newReason}
@@ -407,6 +508,93 @@ export default function CalendarScreen() {
               </Pressable>
             )}
           />
+        </Modal>
+
+        <Modal visible={timeModalVisible} onDismiss={() => setTimeModalVisible(false)} contentContainerStyle={styles.modal}>
+          <Text style={styles.modalTitle}>Wybierz godzinę</Text>
+          <View style={styles.timeColumns}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.timeColLabel}>Godz.</Text>
+              <ScrollView style={styles.timeScroll} showsVerticalScrollIndicator={false}>
+                {Array.from({ length: 24 }, (_, i) => i).map((h) => (
+                  <Pressable
+                    key={h}
+                    onPress={() => setPickerHour(h)}
+                    style={[styles.timeItem, pickerHour === h && styles.timeItemSelected]}
+                  >
+                    <Text style={[styles.timeItemText, pickerHour === h && styles.timeItemTextSel]}>
+                      {String(h).padStart(2, '0')}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+            <Text style={styles.timeColon}>:</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.timeColLabel}>Min.</Text>
+              <ScrollView style={styles.timeScroll} showsVerticalScrollIndicator={false}>
+                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
+                  <Pressable
+                    key={m}
+                    onPress={() => setPickerMinute(m)}
+                    style={[styles.timeItem, pickerMinute === m && styles.timeItemSelected]}
+                  >
+                    <Text style={[styles.timeItemText, pickerMinute === m && styles.timeItemTextSel]}>
+                      {String(m).padStart(2, '0')}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          </View>
+          <Pressable
+            onPress={() => {
+              setNewTime(`${String(pickerHour).padStart(2, '0')}:${String(pickerMinute).padStart(2, '0')}`);
+              setTimeModalVisible(false);
+            }}
+            style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.8 }]}
+          >
+            <Text style={styles.saveBtnText}>Potwierdź</Text>
+          </Pressable>
+        </Modal>
+
+        <Modal visible={dateModalVisible} onDismiss={() => setDateModalVisible(false)} contentContainerStyle={styles.modal}>
+          <Text style={styles.modalTitle}>Wybierz datę</Text>
+          <ScrollView style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
+            {getNextDates(today, 90).map((d) => (
+              <Pressable
+                key={d}
+                onPress={() => { setNewDate(d); setDateModalVisible(false); }}
+                style={[styles.pickerRow, newDate === d && { borderLeftWidth: 3, borderLeftColor: C.accent }]}
+              >
+                <Text style={[styles.pickerName, newDate === d && { color: C.accent }]}>
+                  {formatDateDisplay(d)}
+                </Text>
+                <Text style={styles.pickerSub}>{d}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </Modal>
+
+        <Modal visible={!!visitToDelete} onDismiss={() => setVisitToDelete(null)} contentContainerStyle={styles.modal}>
+          <Text style={styles.modalTitle}>Usuń wizytę</Text>
+          <Text style={{ color: C.text, marginBottom: 20 }}>
+            Czy na pewno chcesz usunąć wizytę pacjenta {visitToDelete?.patientName} (Godzina: {visitToDelete?.visitTime})?
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <Pressable
+              onPress={() => setVisitToDelete(null)}
+              style={({ pressed }) => [{ flex: 1, padding: 12, borderRadius: 10, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, alignItems: 'center' }, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={{ color: C.text, fontWeight: '600' }}>Anuluj</Text>
+            </Pressable>
+            <Pressable
+              onPress={confirmDeleteVisit}
+              style={({ pressed }) => [{ flex: 1, padding: 12, borderRadius: 10, backgroundColor: C.errorBg, borderWidth: 1, borderColor: C.error, alignItems: 'center' }, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={{ color: C.error, fontWeight: '700' }}>Usuń</Text>
+            </Pressable>
+          </View>
         </Modal>
       </Portal>
     </View>
@@ -547,4 +735,14 @@ function makeStyles(C) { return StyleSheet.create({
   },
   pickerName: { fontSize: 14, fontWeight: '600', color: C.text, marginBottom: 2 },
   pickerSub: { fontSize: 11, color: C.muted },
+  webTimeWrap: { marginBottom: 10 },
+  webTimeLabel: { fontSize: 12, color: C.muted, marginBottom: 4, fontWeight: '600' },
+  timeColumns: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 16 },
+  timeColLabel: { fontSize: 11, color: C.muted, fontWeight: '600', textAlign: 'center', marginBottom: 6, textTransform: 'uppercase' },
+  timeScroll: { height: 200, borderWidth: 1, borderColor: C.border, borderRadius: 10, backgroundColor: C.bg },
+  timeItem: { paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center' },
+  timeItemSelected: { backgroundColor: C.accent, borderRadius: 8, marginHorizontal: 4 },
+  timeItemText: { fontSize: 16, fontWeight: '600', color: C.muted },
+  timeItemTextSel: { color: '#fff' },
+  timeColon: { fontSize: 24, fontWeight: '700', color: C.text, alignSelf: 'center', marginTop: 28 },
 }); }

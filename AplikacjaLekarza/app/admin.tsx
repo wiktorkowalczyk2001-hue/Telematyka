@@ -1,15 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
-  Alert,
-  FlatList,
+  View, Text, StyleSheet, ScrollView,
+  Pressable, ActivityIndicator, Alert, RefreshControl,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
+import { useColors } from '@/src/context/ThemeContext';
+
+const getApiUrl = () => typeof window !== 'undefined' ? '/api' : 'http://192.168.0.31:3001';
 
 interface PendingDoctor {
   id: string;
@@ -26,202 +24,138 @@ interface PendingDoctor {
 
 export default function AdminScreen() {
   const { user } = useAuth();
-  const [pendingDoctors, setPendingDoctors] = useState<PendingDoctor[]>([]);
+  const router = useRouter();
+  const C = useColors();
+  const S = useMemo(() => makeStyles(C), [C]);
+
+  const [doctors, setDoctors] = useState<PendingDoctor[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // Check if user is admin (you can add admin flag to users table later)
-  const isAdmin = true; // For now, assume all logged-in users can see this
+  useEffect(() => { fetchPending(); }, []);
 
-  useEffect(() => {
-    fetchPendingDoctors();
-  }, []);
-
-  const fetchPendingDoctors = async () => {
+  const fetchPending = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://192.168.0.31:3001/users?status=eq.pending&order=created_at.asc');
-      if (!response.ok) throw new Error('Failed to fetch');
-      const data = await response.json();
-      setPendingDoctors(data);
-    } catch (error) {
-      console.error('Error fetching doctors:', error);
-      Alert.alert('Błąd', 'Nie udało się pobrać listy lekarz');
+      const res = await fetch(`${getApiUrl()}/users?status=eq.pending&order=created_at.asc`);
+      if (!res.ok) throw new Error('Błąd pobierania');
+      setDoctors(await res.json());
+    } catch (e: any) {
+      Alert.alert('Błąd', e.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const handleApprove = async (doctorId: string, doctorEmail: string) => {
+  const handleDecision = async (doctor: PendingDoctor, approved: boolean) => {
+    if (!approved) {
+      Alert.alert(
+        'Odrzucić rejestrację?',
+        `${doctor.first_name} ${doctor.last_name} (${doctor.email})`,
+        [
+          { text: 'Anuluj', style: 'cancel' },
+          { text: 'Odrzuć', style: 'destructive', onPress: () => doDecision(doctor.id, false) },
+        ],
+      );
+    } else {
+      doDecision(doctor.id, true);
+    }
+  };
+
+  const doDecision = async (doctorId: string, approved: boolean) => {
     try {
       setProcessingId(doctorId);
-      const response = await fetch(`http://192.168.0.31:3001/admin/approve-doctor`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: doctorId, approved: true }),
+      const res = await fetch(`${getApiUrl()}/users?id=eq.${doctorId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify({ status: approved ? 'approved' : 'rejected' }),
       });
-
-      if (!response.ok) throw new Error('Failed to approve');
-
-      Alert.alert('Sukces', `Lekarz ${doctorEmail} został zatwierdzony`);
-      fetchPendingDoctors();
-    } catch (error) {
-      console.error('Error approving doctor:', error);
-      Alert.alert('Błąd', 'Nie udało się zatwierdzić lekarza');
+      if (!res.ok) throw new Error('Błąd zapisu');
+      fetchPending();
+    } catch (e: any) {
+      Alert.alert('Błąd', e.message);
     } finally {
       setProcessingId(null);
     }
   };
 
-  const handleReject = async (doctorId: string, doctorEmail: string) => {
-    Alert.alert(
-      'Odrzucić rejestrację?',
-      `Czy na pewno chcesz odrzucić rejestrację lekarza ${doctorEmail}?`,
-      [
-        { text: 'Anuluj', onPress: () => {}, style: 'cancel' },
-        {
-          text: 'Odrzuć',
-          onPress: async () => {
-            try {
-              setProcessingId(doctorId);
-              const response = await fetch(`http://192.168.0.31:3001/admin/approve-doctor`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: doctorId, approved: false }),
-              });
-
-              if (!response.ok) throw new Error('Failed to reject');
-
-              Alert.alert('Sukces', `Rejestracja lekarza ${doctorEmail} została odrzucona`);
-              fetchPendingDoctors();
-            } catch (error) {
-              console.error('Error rejecting doctor:', error);
-              Alert.alert('Błąd', 'Nie udało się odrzucić rejestracji');
-            } finally {
-              setProcessingId(null);
-            }
-          },
-          style: 'destructive',
-        },
-      ]
-    );
-  };
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchPendingDoctors();
-  };
-
   if (loading) {
     return (
-      <View style={styles.container}>
-        <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#2196f3" />
-          <Text style={styles.loadingText}>Ładowanie oczekujących lekarzy...</Text>
-        </View>
+      <View style={[S.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={C.accent} />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.title}>👨‍⚕️ Zarządzanie lekarzami</Text>
-        <Text style={styles.subtitle}>Weryfikacja nowych rejestracji</Text>
-      </View>
-
-      {/* Status bar */}
-      <View style={styles.statusBar}>
-        <View style={styles.statusItem}>
-          <Text style={styles.statusLabel}>Oczekujących:</Text>
-          <Text style={styles.statusValue}>{pendingDoctors.length}</Text>
+    <View style={S.container}>
+      <View style={S.header}>
+        <Pressable onPress={() => router.back()} style={S.backBtn}>
+          <Text style={S.backText}>‹</Text>
+        </Pressable>
+        <Text style={S.headerTitle}>Panel admina</Text>
+        <View style={S.badge}>
+          <Text style={S.badgeText}>{doctors.length}</Text>
         </View>
       </View>
 
-      {/* Doctors list */}
-      {pendingDoctors.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>✓</Text>
-          <Text style={styles.emptyTitle}>Brak oczekujących rejestracji</Text>
-          <Text style={styles.emptyText}>Wszyscy lekarze zostali zweryfikowani</Text>
+      {doctors.length === 0 ? (
+        <View style={S.empty}>
+          <Text style={S.emptyIcon}>✓</Text>
+          <Text style={S.emptyTitle}>Brak oczekujących rejestracji</Text>
+          <Text style={S.emptyText}>Wszyscy lekarze zweryfikowani</Text>
         </View>
       ) : (
         <ScrollView
-          style={styles.listContainer}
-          refreshControl={{
-            refreshing,
-            onRefresh,
-          }}
-          scrollEventThrottle={16}
+          style={S.list}
+          contentContainerStyle={{ padding: 16, gap: 12 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchPending(); }} tintColor={C.accent} />}
         >
-          {pendingDoctors.map((doctor) => (
-            <View key={doctor.id} style={styles.doctorCard}>
-              {/* Doctor info */}
-              <View style={styles.doctorHeader}>
+          {doctors.map(doc => (
+            <View key={doc.id} style={S.card}>
+              <View style={S.cardHeader}>
                 <View>
-                  <Text style={styles.doctorName}>
-                    dr. {doctor.first_name} {doctor.last_name}
-                  </Text>
-                  <Text style={styles.doctorEmail}>{doctor.email}</Text>
+                  <Text style={S.doctorName}>dr {doc.first_name} {doc.last_name}</Text>
+                  <Text style={S.doctorEmail}>{doc.email}</Text>
                 </View>
-                <View style={styles.registrationBadge}>
-                  <Text style={styles.registrationDate}>
-                    {new Date(doctor.created_at).toLocaleDateString('pl-PL')}
-                  </Text>
-                </View>
+                <Text style={S.date}>{new Date(doc.created_at).toLocaleDateString('pl-PL')}</Text>
               </View>
 
-              {/* Doctor details */}
-              <View style={styles.detailsSection}>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Specjalizacja:</Text>
-                  <Text style={styles.detailValue}>{doctor.specialization}</Text>
-                </View>
-
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Przychodnia:</Text>
-                  <Text style={styles.detailValue}>{doctor.clinic_name}</Text>
-                </View>
-
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>PWZ:</Text>
-                  <Text style={styles.detailValue}>{doctor.pwz_number}</Text>
-                </View>
-
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>NIP:</Text>
-                  <Text style={styles.detailValue}>{doctor.nip}</Text>
-                </View>
+              <View style={S.details}>
+                {[
+                  ['Specjalizacja', doc.specialization],
+                  ['Przychodnia', doc.clinic_name],
+                  ['PWZ', doc.pwz_number],
+                  ['NIP', doc.nip],
+                ].map(([label, value]) => value ? (
+                  <View key={label} style={S.detailRow}>
+                    <Text style={S.detailLabel}>{label}</Text>
+                    <Text style={S.detailValue}>{value}</Text>
+                  </View>
+                ) : null)}
               </View>
 
-              {/* Action buttons */}
-              <View style={styles.actionButtons}>
-                <TouchableOpacity
-                  style={[styles.button, styles.rejectButton]}
-                  onPress={() => handleReject(doctor.id, doctor.email)}
-                  disabled={processingId === doctor.id}
+              <View style={S.actions}>
+                <Pressable
+                  style={[S.btn, S.rejectBtn]}
+                  onPress={() => handleDecision(doc, false)}
+                  disabled={processingId === doc.id}
                 >
-                  {processingId === doctor.id ? (
-                    <ActivityIndicator size="small" color="#f44336" />
-                  ) : (
-                    <Text style={styles.rejectButtonText}>❌ Odrzuć</Text>
-                  )}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.button, styles.approveButton]}
-                  onPress={() => handleApprove(doctor.id, doctor.email)}
-                  disabled={processingId === doctor.id}
+                  {processingId === doc.id
+                    ? <ActivityIndicator size="small" color={C.error} />
+                    : <Text style={[S.btnText, { color: C.error }]}>Odrzuć</Text>}
+                </Pressable>
+                <Pressable
+                  style={[S.btn, S.approveBtn]}
+                  onPress={() => handleDecision(doc, true)}
+                  disabled={processingId === doc.id}
                 >
-                  {processingId === doctor.id ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Text style={styles.approveButtonText}>✓ Zatwierdź</Text>
-                  )}
-                </TouchableOpacity>
+                  {processingId === doc.id
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Text style={S.btnText}>Zatwierdź</Text>}
+                </Pressable>
               </View>
             </View>
           ))}
@@ -231,172 +165,73 @@ export default function AdminScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  loaderContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#666',
-  },
-  header: {
-    backgroundColor: '#2196f3',
-    paddingHorizontal: 20,
-    paddingTop: 40,
-    paddingBottom: 20,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.8)',
-  },
-  statusBar: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-    flexDirection: 'row',
-  },
-  statusItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginRight: 8,
-  },
-  statusValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#ff9800',
-  },
-  listContainer: {
-    flex: 1,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyIcon: {
-    fontSize: 64,
-    marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: '#999',
-  },
-  doctorCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginVertical: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  doctorHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  doctorName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-  },
-  doctorEmail: {
-    fontSize: 13,
-    color: '#999',
-  },
-  registrationBadge: {
-    backgroundColor: '#fff3cd',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-  },
-  registrationDate: {
-    fontSize: 12,
-    color: '#ff9800',
-    fontWeight: '600',
-  },
-  detailsSection: {
-    backgroundColor: '#f9f9f9',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  detailLabel: {
-    fontSize: 12,
-    color: '#999',
-    fontWeight: '500',
-  },
-  detailValue: {
-    fontSize: 12,
-    color: '#333',
-    fontWeight: '600',
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  approveButton: {
-    backgroundColor: '#4caf50',
-  },
-  approveButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  rejectButton: {
-    backgroundColor: '#ffebee',
-    borderWidth: 1,
-    borderColor: '#f44336',
-  },
-  rejectButtonText: {
-    color: '#f44336',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-});
+function makeStyles(C: any) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: C.bg },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      height: 56,
+      backgroundColor: C.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: C.border,
+      paddingHorizontal: 12,
+      gap: 10,
+    },
+    backBtn: { padding: 8 },
+    backText: { fontSize: 24, color: C.accent, lineHeight: 28 },
+    headerTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: C.text },
+    badge: {
+      backgroundColor: C.accentDim,
+      borderRadius: 12,
+      paddingHorizontal: 10,
+      paddingVertical: 3,
+      borderWidth: 1,
+      borderColor: C.accent,
+    },
+    badgeText: { fontSize: 13, fontWeight: '700', color: C.accent },
+    empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 8 },
+    emptyIcon: { fontSize: 48 },
+    emptyTitle: { fontSize: 16, fontWeight: '600', color: C.text },
+    emptyText: { fontSize: 13, color: C.muted },
+    list: { flex: 1 },
+    card: {
+      backgroundColor: C.surface,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: C.border,
+      overflow: 'hidden',
+    },
+    cardHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      padding: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: C.border,
+    },
+    doctorName: { fontSize: 15, fontWeight: '700', color: C.text, marginBottom: 2 },
+    doctorEmail: { fontSize: 12, color: C.muted },
+    date: { fontSize: 11, color: C.accent, fontWeight: '600' },
+    details: { padding: 14, gap: 8 },
+    detailRow: { flexDirection: 'row', justifyContent: 'space-between' },
+    detailLabel: { fontSize: 12, color: C.muted },
+    detailValue: { fontSize: 12, color: C.text, fontWeight: '600' },
+    actions: {
+      flexDirection: 'row',
+      gap: 10,
+      padding: 14,
+      borderTopWidth: 1,
+      borderTopColor: C.border,
+    },
+    btn: {
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: 10,
+      alignItems: 'center',
+    },
+    approveBtn: { backgroundColor: C.accent },
+    rejectBtn: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.error ?? '#E87060' },
+    btnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  });
+}
